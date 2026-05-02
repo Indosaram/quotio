@@ -187,6 +187,7 @@ struct QuotioApp: App {
     @State private var appearanceManager = AppearanceManager.shared
     @State private var languageManager = LanguageManager.shared
     @State private var showOnboarding = false
+    @State private var showProxyBinarySourceSelection = false
     @Environment(\.openWindow) private var openWindow
 
     private var viewModel: QuotaViewModel { bootstrap.viewModel }
@@ -207,6 +208,8 @@ struct QuotioApp: App {
                     // Show onboarding if needed
                     if bootstrap.needsOnboarding {
                         showOnboarding = true
+                    } else if viewModel.proxyManager.shouldPromptForBinarySourceSelection {
+                        showProxyBinarySourceSelection = true
                     }
                 }
                 .onChange(of: viewModel.proxyManager.proxyStatus.running) {
@@ -260,8 +263,17 @@ struct QuotioApp: App {
                     OnboardingFlow {
                         Task {
                             await bootstrap.completeOnboarding()
+                            if viewModel.proxyManager.shouldPromptForBinarySourceSelection {
+                                showProxyBinarySourceSelection = true
+                            }
                         }
                     }
+                }
+                .sheet(isPresented: $showProxyBinarySourceSelection) {
+                    ProxyBinarySourceSelectionSheet {
+                        showProxyBinarySourceSelection = false
+                    }
+                    .environment(viewModel)
                 }
         }
         .defaultSize(width: 1000, height: 700)
@@ -284,6 +296,12 @@ struct QuotioApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private nonisolated(unsafe) var windowWillCloseObserver: NSObjectProtocol?
     private nonisolated(unsafe) var windowDidBecomeKeyObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var windowDidBecomeMainObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var appDidResignActiveObserver: NSObjectProtocol?
+    private var pendingForegroundReassert = false
+    private weak var trackedDashboardWindow: NSWindow?
+    private var lastDashboardActivationDate: Date?
+    private var hasTriggeredAntiDropForCurrentActivation = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Move orphan cleanup off main thread to avoid blocking app launch
@@ -313,18 +331,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Start background polling for CLIProxyAPI updates (every 5 minutes)
             // Uses Atom feed with ETag caching for efficiency
-            AtomFeedUpdateService.shared.startPolling {
-                CLIProxyManager.shared.currentVersion ?? CLIProxyManager.shared.installedProxyVersion
-            }
+            AtomFeedUpdateService.shared.startPolling(
+                getCurrentSource: { CLIProxyManager.shared.selectedBinarySource },
+                getCurrentVersion: { CLIProxyManager.shared.currentVersion ?? CLIProxyManager.shared.installedProxyVersion }
+            )
         }
 
         windowWillCloseObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
+            let closingWindow = notification.object as? NSWindow
             MainActor.assumeIsolated {
-                self?.handleWindowWillClose()
+                self?.handleWindowWillClose(closingWindow)
             }
         }
 
@@ -337,6 +357,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.handleWindowDidBecomeKey()
             }
         }
+
+        windowDidBecomeMainObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeMainNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let mainWindow = notification.object as? NSWindow
+            MainActor.assumeIsolated {
+                self?.handleWindowDidBecomeMain(mainWindow)
+            }
+        }
+
+        appDidResignActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleApplicationDidResignActive()
+            }
+        }
     }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -344,21 +385,114 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // When user clicks dock icon or menubar "Open Quotio" and no visible windows
-        if !flag {
-            // Find and show the main window
-            for window in sender.windows {
-                if window.title == "Quotio" {
-                    // Restore minimized window first
-                    if window.isMiniaturized {
-                        window.deminiaturize(nil)
-                    }
-                    window.makeKeyAndOrderFront(nil)
-                    return true
-                }
-            }
-        }
+        _ = bringMainWindowToFront(in: sender)
         return true
+    }
+
+    private var shouldUseAccessoryPolicy: Bool {
+        !UserDefaults.standard.bool(forKey: "showInDock")
+    }
+
+    private func ensureRegularPolicyForMainWindowForeground(in app: NSApplication) -> Bool {
+        guard shouldUseAccessoryPolicy else { return true }
+
+        if app.activationPolicy() == .regular {
+            return true
+        }
+
+        guard app.setActivationPolicy(.regular) else {
+            return false
+        }
+
+        return true
+    }
+
+    private func promoteToRegularPolicyIfNeeded() -> Bool {
+        guard shouldUseAccessoryPolicy else { return true }
+
+        if NSApp.activationPolicy() == .regular {
+            return true
+        }
+
+        _ = NSApp.setActivationPolicy(.regular)
+        return NSApp.activationPolicy() == .regular
+    }
+
+    private func promoteToRegularPolicyWithRetry(reason: String, remainingAttempts: Int = 3) {
+        guard remainingAttempts > 0 else { return }
+
+        if promoteToRegularPolicyIfNeeded() {
+            if let window = mainWindow(in: NSApp) {
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+            }
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            self.promoteToRegularPolicyWithRetry(reason: reason, remainingAttempts: remainingAttempts - 1)
+        }
+    }
+
+    private func restoreAccessoryPolicyIfNeeded(in app: NSApplication) {
+        guard shouldUseAccessoryPolicy else { return }
+
+        let hasVisibleMainCapableWindow = app.windows.contains { window in
+            window.canBecomeMain && window.isVisible && !window.isMiniaturized
+        }
+
+        if !hasVisibleMainCapableWindow && app.activationPolicy() != .accessory {
+            app.setActivationPolicy(.accessory)
+        }
+    }
+
+    private func bringMainWindowToFront(in app: NSApplication) -> Bool {
+        guard let window = mainWindow(in: app) else { return false }
+        guard ensureRegularPolicyForMainWindowForeground(in: app) else { return false }
+
+        trackedDashboardWindow = window
+        pendingForegroundReassert = true
+
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+
+        window.makeKeyAndOrderFront(nil)
+
+        DispatchQueue.main.async {
+            app.activate(ignoringOtherApps: true)
+            NSRunningApplication.current.activate(options: [.activateAllWindows])
+
+            if let refreshedWindow = self.mainWindow(in: app) {
+                self.trackedDashboardWindow = refreshedWindow
+                refreshedWindow.makeKeyAndOrderFront(nil)
+            }
+
+            if !app.isActive {
+                window.orderFrontRegardless()
+            } else {
+                self.pendingForegroundReassert = false
+            }
+
+        }
+
+        return true
+    }
+
+    private func mainWindow(in app: NSApplication) -> NSWindow? {
+        if let trackedDashboardWindow,
+           app.windows.contains(where: { $0 === trackedDashboardWindow }),
+           isDashboardWindowCandidate(trackedDashboardWindow) {
+            return trackedDashboardWindow
+        }
+
+        let dashboardCandidates = app.windows.filter { isDashboardWindowCandidate($0) }
+        return dashboardCandidates.first
+    }
+
+    private func isDashboardWindowCandidate(_ window: NSWindow) -> Bool {
+        window.canBecomeMain
+            && window.level == .normal
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -385,14 +519,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func handleWindowDidBecomeKey() {
-        // Do nothing - activation policy is managed by showInDock setting only
+    func applicationDidBecomeActive(_ notification: Notification) {
+        let keyWindowIsDashboardCandidate = NSApp.keyWindow.map(isDashboardWindowCandidate) ?? false
+
+        if keyWindowIsDashboardCandidate {
+            promoteToRegularPolicyWithRetry(reason: "didBecomeActive")
+            lastDashboardActivationDate = Date()
+            hasTriggeredAntiDropForCurrentActivation = false
+        }
+
+        guard pendingForegroundReassert else { return }
+        guard let window = mainWindow(in: NSApp) else {
+            pendingForegroundReassert = false
+            return
+        }
+
+        window.makeKeyAndOrderFront(nil)
+        pendingForegroundReassert = false
     }
 
-    private func handleWindowWillClose() {
-        // Do nothing - activation policy is managed by showInDock setting only
-        // When showInDock = true, dock icon stays visible even when window is closed
-        // When showInDock = false, dock icon is never visible
+    private func handleWindowDidBecomeMain(_ window: NSWindow?) {
+        guard let window else { return }
+        guard isDashboardWindowCandidate(window) else { return }
+
+        trackedDashboardWindow = window
+    }
+
+    private func handleApplicationDidResignActive() {
+        guard !hasTriggeredAntiDropForCurrentActivation else { return }
+        guard let activationDate = lastDashboardActivationDate else { return }
+
+        let elapsedSinceActivation = Date().timeIntervalSince(activationDate)
+        guard elapsedSinceActivation <= 0.5 else { return }
+        guard let dashboardWindow = mainWindow(in: NSApp), dashboardWindow.isVisible else { return }
+
+        hasTriggeredAntiDropForCurrentActivation = true
+
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            dashboardWindow.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private func handleWindowDidBecomeKey() {
+        guard let keyWindow = NSApp.keyWindow else { return }
+        guard let appMainWindow = mainWindow(in: NSApp), keyWindow === appMainWindow else { return }
+
+        promoteToRegularPolicyWithRetry(reason: "didBecomeKey")
+        guard ensureRegularPolicyForMainWindowForeground(in: NSApp) else { return }
+
+        if !NSApp.isActive {
+            pendingForegroundReassert = true
+            NSApp.activate(ignoringOtherApps: true)
+            keyWindow.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private func handleWindowWillClose(_ closingWindow: NSWindow?) {
+        let isClosingDashboardWindow = closingWindow.map {
+            ($0 === trackedDashboardWindow) || isDashboardWindowCandidate($0)
+        } ?? false
+
+        guard isClosingDashboardWindow else { return }
+
+        DispatchQueue.main.async {
+            self.restoreAccessoryPolicyIfNeeded(in: NSApp)
+        }
     }
     
     deinit {
@@ -400,6 +592,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = windowDidBecomeKeyObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = windowDidBecomeMainObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = appDidResignActiveObserver {
             NotificationCenter.default.removeObserver(observer)
         }
     }

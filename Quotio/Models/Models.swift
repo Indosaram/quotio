@@ -35,7 +35,7 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable {
         case .iflow: return "iFlow"
         case .antigravity: return "Antigravity"
         case .vertex: return "Vertex AI"
-        case .kiro: return "Kiro (CodeWhisperer)"
+        case .kiro: return "Kiro"
         case .copilot: return "GitHub Copilot"
         case .cursor: return "Cursor"
         case .trae: return "Trae"
@@ -166,9 +166,9 @@ nonisolated enum AIProvider: String, CaseIterable, Codable, Identifiable {
     /// Whether this provider supports quota tracking in quota-only mode
     var supportsQuotaOnlyMode: Bool {
         switch self {
-        case .claude, .codex, .cursor, .gemini, .antigravity, .copilot, .trae, .glm, .warp, .kimi:
+        case .claude, .codex, .cursor, .gemini, .antigravity, .copilot, .trae, .glm, .warp, .kiro, .kimi:
             return true
-        case .qwen, .iflow, .vertex, .kiro:
+        case .qwen, .iflow, .vertex:
             return false
         }
     }
