@@ -89,6 +89,7 @@ struct FallbackScreen: View {
                 onDismiss: {
                     addingEntryToModelId = nil
                 },
+                ignoreCompatibility: virtualModel?.ignoreCompatibility ?? false,
                 onRefresh: addEntryRefreshAction
             )
         }
@@ -277,6 +278,9 @@ struct FallbackScreen: View {
                         onToggle: {
                             fallbackSettings.toggleVirtualModel(id: model.id)
                         },
+                        onToggleIgnoreCompatibility: {
+                            fallbackSettings.toggleIgnoreCompatibility(id: model.id)
+                        },
                         onEdit: {
                             editingVirtualModel = model
                         },
@@ -365,6 +369,7 @@ struct VirtualModelRow: View {
     let model: VirtualModel
     let isGlobalEnabled: Bool
     let onToggle: () -> Void
+    let onToggleIgnoreCompatibility: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onAddEntry: () -> Void
@@ -434,6 +439,17 @@ struct VirtualModelRow: View {
                         .foregroundStyle(.tertiary)
                 }
 
+                // Ignore compatibility toggle
+                if model.ignoreCompatibility {
+                    Text("Mixed")
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.2))
+                        .foregroundStyle(.orange)
+                        .clipShape(Capsule())
+                }
+
                 Spacer()
 
                 // Toggle button
@@ -458,6 +474,13 @@ struct VirtualModelRow: View {
                 } label: {
                     Label(model.isEnabled ? "fallback.disable".localized() : "fallback.enable".localized(),
                           systemImage: model.isEnabled ? "xmark.circle" : "checkmark.circle")
+                }
+
+                Button {
+                    onToggleIgnoreCompatibility()
+                } label: {
+                    Label(model.ignoreCompatibility ? "fallback.disableIgnoreCompat".localized() : "fallback.enableIgnoreCompat".localized(),
+                          systemImage: model.ignoreCompatibility ? "arrow.left.arrow.right.circle.fill" : "arrow.left.arrow.right.circle")
                 }
 
                 Divider()

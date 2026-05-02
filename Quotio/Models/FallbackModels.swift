@@ -89,12 +89,14 @@ struct VirtualModel: Codable, Identifiable, Hashable, Sendable {
     var name: String
     var fallbackEntries: [FallbackEntry]
     var isEnabled: Bool
+    var ignoreCompatibility: Bool
 
-    init(id: UUID = UUID(), name: String, fallbackEntries: [FallbackEntry] = [], isEnabled: Bool = true) {
+    init(id: UUID = UUID(), name: String, fallbackEntries: [FallbackEntry] = [], isEnabled: Bool = true, ignoreCompatibility: Bool = false) {
         self.id = id
         self.name = name
         self.fallbackEntries = fallbackEntries
         self.isEnabled = isEnabled
+        self.ignoreCompatibility = ignoreCompatibility
     }
 
     /// Get entries sorted by priority

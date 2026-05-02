@@ -402,12 +402,114 @@ final class AgentSetupViewModel {
     }
 
     private func processModels(_ fetchedModels: [AvailableModel]) -> [AvailableModel] {
-        // If API returned models, use them; otherwise fallback to default models
-        if !fetchedModels.isEmpty {
-            return fetchedModels.sorted { $0.displayName < $1.displayName }
+        var models = !fetchedModels.isEmpty ? fetchedModels : AvailableModel.allModels
+        let existingModelIds = Set(models.map(\.id))
+
+        for customModel in customProviderAvailableModels(excluding: existingModelIds) {
+            models.append(customModel)
         }
 
-        return AvailableModel.allModels.sorted { $0.displayName < $1.displayName }
+        return models.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private func customProviderAvailableModels(excluding existingModelIds: Set<String>) -> [AvailableModel] {
+        CustomProviderService.shared.enabledProviders.flatMap { provider in
+            let mappedModels = provider.models.compactMap { mapping in
+                availableCustomModel(
+                    modelId: exposedModelId(for: mapping, in: provider),
+                    displayName: mapping.effectiveAlias,
+                    provider: provider,
+                    excluding: existingModelIds
+                )
+            }
+
+            if !mappedModels.isEmpty {
+                return mappedModels
+            }
+
+            let prefixModel = availableCustomModel(
+                modelId: prefixOnlyModelId(for: provider),
+                displayName: prefixOnlyDisplayName(for: provider),
+                provider: provider,
+                excluding: existingModelIds
+            )
+
+            return prefixModel.map { [$0] } ?? []
+        }
+    }
+
+    private func availableCustomModel(
+        modelId: String,
+        displayName: String,
+        provider: CustomProvider,
+        excluding existingModelIds: Set<String>
+    ) -> AvailableModel? {
+        let trimmedModelId = modelId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedModelId.isEmpty, !existingModelIds.contains(trimmedModelId) else {
+            return nil
+        }
+
+        let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedDisplayName = trimmedDisplayName.isEmpty ? trimmedModelId : trimmedDisplayName
+
+        return AvailableModel(
+            id: trimmedModelId,
+            name: resolvedDisplayName,
+            provider: fallbackProviderIdentifier(for: provider, modelId: trimmedModelId),
+            isDefault: false
+        )
+    }
+
+    private func exposedModelId(for mapping: ModelMapping, in provider: CustomProvider) -> String {
+        let alias = mapping.effectiveAlias.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !alias.isEmpty else { return "" }
+
+        let prefix = provider.prefix?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !prefix.isEmpty else { return alias }
+
+        if alias.hasPrefix(prefix + "-") || alias.hasPrefix(prefix + "_") || alias == prefix {
+            return alias
+        }
+
+        if prefix.hasSuffix("-") || prefix.hasSuffix("_") {
+            return prefix + alias
+        }
+
+        return prefix + "-" + alias
+    }
+
+    private func prefixOnlyModelId(for provider: CustomProvider) -> String {
+        provider.prefix?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private func prefixOnlyDisplayName(for provider: CustomProvider) -> String {
+        let prefixModelId = prefixOnlyModelId(for: provider)
+        if let lastPathComponent = prefixModelId.split(separator: "/").last {
+            return String(lastPathComponent)
+        }
+
+        return prefixModelId
+    }
+
+    private func fallbackProviderIdentifier(for provider: CustomProvider, modelId: String) -> String {
+        let loweredProviderName = provider.name.lowercased()
+        let loweredPrefix = provider.prefix?.lowercased() ?? ""
+        let loweredModelId = modelId.lowercased()
+
+        if loweredModelId.contains("kimi") || loweredProviderName.contains("kimi") || loweredPrefix.contains("kimi") {
+            return AIProvider.kimi.rawValue
+        }
+
+        switch provider.type {
+        case .openaiCompatibility, .codexCompatibility:
+            return AIProvider.codex.rawValue
+        case .claudeCompatibility:
+            return AIProvider.claude.rawValue
+        case .geminiCompatibility:
+            return AIProvider.gemini.rawValue
+        case .glmCompatibility:
+            return AIProvider.glm.rawValue
+        }
     }
 
     /// Refresh virtual models - removes old ones and adds current ones

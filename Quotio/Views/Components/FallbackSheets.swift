@@ -102,6 +102,7 @@ struct AddFallbackEntrySheet: View {
     let availableModels: [AvailableModel]
     let onAdd: (AIProvider, String) -> Void
     let onDismiss: () -> Void
+    var ignoreCompatibility: Bool = false
     /// Optional async refresh callback. Returns `true` on success, `false` on failure.
     var onRefresh: (() async -> Bool)? = nil
 
@@ -125,7 +126,7 @@ struct AddFallbackEntrySheet: View {
     private func isSelectableModel(_ model: AvailableModel) -> Bool {
         model.provider.lowercased() != "fallback" &&
         !existingModelIds.contains(model.id) &&
-        ModelType.detect(from: model.id) == virtualModelType
+        (ignoreCompatibility || ModelType.detect(from: model.id) == virtualModelType)
     }
 
     /// Filter out virtual models, already added entries, and incompatible model types
@@ -148,6 +149,10 @@ struct AddFallbackEntrySheet: View {
     private func providerFromModel(_ model: AvailableModel) -> AIProvider {
         let providerName = model.provider.lowercased()
         let modelId = model.id.lowercased()
+        let modelType = ModelType.detect(from: model.id)
+        if modelType == .gpt {
+            return .codex
+        }
 
         // FIRST: Try exact match on provider field (most reliable — from proxy API owned_by)
         // e.g., "github-copilot" -> .copilot, "antigravity" -> .antigravity
@@ -183,6 +188,19 @@ struct AddFallbackEntrySheet: View {
 
     private var isValidEntry: Bool {
         !selectedModelId.isEmpty && selectedModel != nil
+    }
+
+    private func fallbackProviderDisplayName(_ provider: AIProvider) -> String {
+        provider == .codex ? "OpenAI" : provider.displayName
+    }
+
+    private var groupedModels: [(provider: AIProvider, models: [AvailableModel])] {
+        let grouped = Dictionary(grouping: filteredModels, by: providerFromModel)
+
+        return AIProvider.allCases.compactMap { provider in
+            guard let models = grouped[provider], !models.isEmpty else { return nil }
+            return (provider, models.sorted { $0.displayName < $1.displayName })
+        }
     }
 
     var body: some View {
@@ -228,11 +246,9 @@ struct AddFallbackEntrySheet: View {
                             Text("fallback.selectModelPlaceholder".localized())
                                 .tag("")
 
-                            let providers = Set(filteredModels.map { $0.provider }).sorted()
-
-                            ForEach(providers, id: \.self) { provider in
-                                Section(header: Text(provider.capitalized)) {
-                                    ForEach(filteredModels.filter { $0.provider == provider }) { model in
+                            ForEach(groupedModels, id: \.provider) { group in
+                                Section(header: Text(fallbackProviderDisplayName(group.provider))) {
+                                    ForEach(group.models) { model in
                                         Text(model.displayName)
                                             .tag(model.id)
                                     }
@@ -259,7 +275,7 @@ struct AddFallbackEntrySheet: View {
                     HStack(spacing: 8) {
                         let provider = providerFromModel(model)
                         ProviderIcon(provider: provider, size: 16)
-                        Text(provider.displayName)
+                        Text(fallbackProviderDisplayName(provider))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Text("→")

@@ -152,6 +152,13 @@ final class FallbackSettingsManager {
         }
     }
 
+    /// Toggle ignore compatibility for a virtual model
+    func toggleIgnoreCompatibility(id: UUID) {
+        if let index = configuration.virtualModels.firstIndex(where: { $0.id == id }) {
+            configuration.virtualModels[index].ignoreCompatibility.toggle()
+        }
+    }
+
     /// Rename a virtual model (returns false if name already exists)
     func renameVirtualModel(id: UUID, newName: String) -> Bool {
         let trimmedName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
