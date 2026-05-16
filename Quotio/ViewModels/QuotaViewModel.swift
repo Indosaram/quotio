@@ -1106,16 +1106,24 @@ final class QuotaViewModel {
         }
     }
     
-    /// Attempt to recover an unresponsive proxy
     private func attemptProxyRecovery() async {
-        // Check if process is still running
-        if proxyManager.proxyStatus.running {
-            // Proxy process is running but not responding - likely hung
-            // Stop and restart
-            stopProxy()
-            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
-            await startProxy()
+        guard proxyManager.proxyStatus.running else { return }
+
+        Log.quota("Proxy recovery: stopping...")
+        refreshTask?.cancel()
+        refreshTask = nil
+        requestTracker.stop()
+
+        let clientToInvalidate = _apiClient
+        _apiClient = nil
+        if let client = clientToInvalidate {
+            Task { await client.invalidate() }
         }
+
+        await proxyManager.stopAndWait()
+        Log.quota("Proxy recovery: stopped, restarting...")
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        await startProxy()
     }
     
     @ObservationIgnored private var lastQuotaRefresh: Date?
@@ -1141,7 +1149,11 @@ final class QuotaViewModel {
 
             self.authFiles = newAuthFiles
 
-            self.usageStats = try await client.fetchUsageStats()
+            do {
+                self.usageStats = try await client.fetchUsageStats()
+            } catch APIError.httpError(404) {
+                self.usageStats = nil
+            }
             self.apiKeys = try await client.fetchAPIKeys()
             
             // Clear any previous error on success
