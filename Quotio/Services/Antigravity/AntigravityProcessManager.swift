@@ -2,25 +2,27 @@
 //  AntigravityProcessManager.swift
 //  Quotio
 //
-//  Manages Antigravity IDE process lifecycle for account switching.
+//  Manages Antigravity process lifecycle for account switching.
 //  Handles detection, graceful termination, and restart.
 //
 
 import Foundation
 import AppKit
 
-/// Manages Antigravity IDE process lifecycle
+/// Manages Antigravity process lifecycle
 @MainActor
 final class AntigravityProcessManager {
     
+    // MARK: - Target
+
+    private struct LegacyTarget {
+        static let bundleIdentifiers = AntigravityPaths.bundleIdentifiers
+        static let helperPrefix = "Antigravity Helper"
+        static let appPaths = AntigravityPaths.legacyAppPaths
+    }
+
     // MARK: - Constants
-    
-    /// Bundle identifiers for Antigravity IDE (multiple possible values)
-    private static let bundleIdentifiers = [
-        "com.google.antigravity",           // Official Google release
-        "com.todesktop.230313mzl4w4u92"     // ToDesktop wrapped version
-    ]
-    private static let appName = "Antigravity"
+
     private static let terminationTimeout: TimeInterval = 20.0
     private static let forceKillTimeout: TimeInterval = 3.0
     
@@ -31,7 +33,7 @@ final class AntigravityProcessManager {
     
     // MARK: - Process Detection
     
-    /// Check if Antigravity IDE is currently running
+    /// Check if Antigravity is currently running
     func isRunning() -> Bool {
         !runningInstances().isEmpty
     }
@@ -39,7 +41,7 @@ final class AntigravityProcessManager {
     /// Get running Antigravity application instances
     private func runningInstances() -> [NSRunningApplication] {
         var instances: [NSRunningApplication] = []
-        for bundleId in Self.bundleIdentifiers {
+        for bundleId in LegacyTarget.bundleIdentifiers {
             instances.append(contentsOf: NSRunningApplication.runningApplications(withBundleIdentifier: bundleId))
         }
         return instances
@@ -47,36 +49,30 @@ final class AntigravityProcessManager {
     
     // MARK: - Process Control
     
-    /// Gracefully terminate Antigravity IDE
+    /// Gracefully terminate Antigravity
     /// - Returns: true if successfully terminated, false if force kill was needed
     @discardableResult
     func terminate() async -> Bool {
         let apps = runningInstances()
         guard !apps.isEmpty else { return true }
         
-        // Send SIGTERM (graceful termination)
         for app in apps {
             app.terminate()
         }
         
-        // Wait for graceful termination
         let gracefullyTerminated = await waitForTermination(timeout: Self.terminationTimeout)
         
         if gracefullyTerminated {
-            // Also kill any remaining helper processes
             await killHelperProcesses()
             return true
         }
         
-        // Force kill if still running
         for app in apps {
             app.forceTerminate()
         }
         
-        // Wait for force termination
         _ = await waitForTermination(timeout: Self.forceKillTimeout)
         
-        // Kill any orphaned helper processes that may still hold database locks
         await killHelperProcesses()
         
         return false
@@ -85,43 +81,40 @@ final class AntigravityProcessManager {
     /// Terminate Antigravity and any helper processes, even if the main app is not running
     @discardableResult
     func terminateAllProcesses() async -> Bool {
-        let terminated = await terminate()
-        await killHelperProcesses()
-        return terminated
+        let apps = runningInstances()
+        if apps.isEmpty {
+            await killHelperProcesses()
+            return true
+        }
+        return await terminate()
     }
     
-    // ════════════════════════════════════════════════════════════════════════
     // MARK: - Helper Process Cleanup
-    // ════════════════════════════════════════════════════════════════════════
     
-    /// Kill all Antigravity helper processes that may hold database locks.
-    /// Executes blocking operations on a detached task to avoid blocking MainActor.
-    /// Compatible with macOS 14+, 15+, 26+.
     private func killHelperProcesses() async {
+        let prefix = LegacyTarget.helperPrefix
         let helperPatterns = [
-            "Antigravity Helper",
-            "Antigravity Helper (GPU)",
-            "Antigravity Helper (Plugin)",
-            "Antigravity Helper (Renderer)"
+            prefix,
+            "\(prefix) (GPU)",
+            "\(prefix) (Plugin)",
+            "\(prefix) (Renderer)"
         ]
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             Task.detached(priority: .userInitiated) {
-                // Method 1: Use killall for each helper pattern (most reliable)
                 for pattern in helperPatterns {
                     let killall = Process()
                     killall.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-                    killall.arguments = ["-9", pattern, "-t", "2"]  // -t 2s timeout
+                    killall.arguments = ["-9", pattern, "-t", "2"]
                     killall.standardOutput = FileHandle.nullDevice
                     killall.standardError = FileHandle.nullDevice
                     try? killall.run()
                     killall.waitUntilExit()
                 }
 
-                // Method 2: Use pkill as fallback (catches any remaining)
                 let pkill = Process()
                 pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-                pkill.arguments = ["-9", "-f", "Antigravity Helper"]
+                pkill.arguments = ["-9", "-f", prefix]
                 pkill.standardOutput = FileHandle.nullDevice
                 pkill.standardError = FileHandle.nullDevice
                 try? pkill.run()
@@ -131,12 +124,10 @@ final class AntigravityProcessManager {
             }
         }
 
-        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+        try? await Task.sleep(nanoseconds: 200_000_000)
     }
     
     /// Wait for all instances to terminate
-    /// - Parameter timeout: Maximum time to wait
-    /// - Returns: true if terminated, false if timeout or cancelled
     private func waitForTermination(timeout: TimeInterval) async -> Bool {
         let startTime = Date()
 
@@ -147,29 +138,24 @@ final class AntigravityProcessManager {
             if runningInstances().isEmpty {
                 return true
             }
-            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            try? await Task.sleep(nanoseconds: 100_000_000)
         }
 
         return runningInstances().isEmpty
     }
     
-    /// Launch Antigravity IDE
     func launch() async throws {
-        // Try to find Antigravity in Applications folder first
-        let applicationsPath = "/Applications/Antigravity.app"
-        let userApplicationsPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Applications/Antigravity.app")
-        
         var appURL: URL?
-        
-        if FileManager.default.fileExists(atPath: applicationsPath) {
-            appURL = URL(fileURLWithPath: applicationsPath)
-        } else if FileManager.default.fileExists(atPath: userApplicationsPath.path) {
-            appURL = userApplicationsPath
-        } else {
-            // Try to find using bundle identifiers
-            for bundleId in Self.bundleIdentifiers {
-                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+
+        for path in LegacyTarget.appPaths where FileManager.default.fileExists(atPath: path) {
+            appURL = URL(fileURLWithPath: path)
+            break
+        }
+
+        if appURL == nil {
+            for bundleId in LegacyTarget.bundleIdentifiers {
+                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId),
+                   AntigravityPaths.isAntigravityApp(at: url) {
                     appURL = url
                     break
                 }
@@ -183,8 +169,7 @@ final class AntigravityProcessManager {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         
-        let workspace = NSWorkspace.shared
-        try await workspace.openApplication(at: url, configuration: configuration)
+        try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
     }
     
     // MARK: - Errors
@@ -197,11 +182,11 @@ final class AntigravityProcessManager {
         var errorDescription: String? {
             switch self {
             case .applicationNotFound:
-                return "Antigravity IDE not found. Please ensure it is installed."
+                return "Antigravity not found. Please ensure it is installed."
             case .terminationFailed:
-                return "Failed to terminate Antigravity IDE"
+                return "Failed to terminate Antigravity"
             case .launchFailed(let error):
-                return "Failed to launch Antigravity IDE: \(error.localizedDescription)"
+                return "Failed to launch Antigravity: \(error.localizedDescription)"
             }
         }
     }

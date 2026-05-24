@@ -328,8 +328,101 @@ nonisolated enum AntigravityProtobufHandler {
         return cleanData.base64EncodedString()
     }
     
+    // MARK: - User Status (>= 1.16.5)
+
+    /// Create minimal userStatus binary for the inner payload.
+    ///
+    /// Protobuf structure:
+    ///   field 3: email (string)
+    ///   field 7: email (string)
+    static func createUserStatusBinary(email: String) -> Data {
+        var msg = Data()
+        msg.append(encodeStringField(fieldNum: 3, value: email))
+        msg.append(encodeStringField(fieldNum: 7, value: email))
+        return msg
+    }
+
+    /// Create full new-format payload for antigravityUnifiedStateSync.userStatus
+    ///
+    /// Structure mirrors oauthToken payload:
+    ///   OuterMessage { field 1: InnerMessage {
+    ///     field 1: "userStatusSentinelKey" (string),
+    ///     field 2: InnerMessage2 { field 1: base64(UserStatusBinary) (string) }
+    ///   }}
+    /// Returns base64-encoded string ready for database storage.
+    static func createUserStatusPayload(email: String) -> String {
+        let statusBinary = createUserStatusBinary(email: email)
+        let statusBinaryB64 = statusBinary.base64EncodedString()
+
+        // InnerMessage2: field 1 = base64(UserStatusBinary)
+        let inner2 = encodeStringField(fieldNum: 1, value: statusBinaryB64)
+
+        // InnerMessage: field 1 = sentinel key, field 2 = InnerMessage2
+        var inner = encodeStringField(fieldNum: 1, value: "userStatusSentinelKey")
+        inner.append(encodeLenDelimField(fieldNum: 2, data: inner2))
+
+        // OuterMessage: field 1 = InnerMessage
+        let outer = encodeLenDelimField(fieldNum: 1, data: inner)
+
+        return outer.base64EncodedString()
+    }
+
     // MARK: - Token Extraction
-    
+
+    /// Extract OAuth info from a new-format payload (antigravityUnifiedStateSync.oauthToken).
+    ///
+    /// Reverses `createNewFormatPayload`:
+    ///   base64 → OuterMessage field 1 (InnerMessage)
+    ///           → InnerMessage field 2 (InnerMessage2)
+    ///           → InnerMessage2 field 1 (base64 string of OAuthTokenInfo binary)
+    ///           → base64-decode → OAuthTokenInfo { field 1: accessToken, field 3: refreshToken, field 4: Timestamp }
+    static func extractOAuthInfoFromNewFormat(base64Data: String) throws -> (accessToken: String?, refreshToken: String?, expiry: Int64?) {
+        guard let outerData = Data(base64Encoded: base64Data) else {
+            throw ProtobufError.invalidBase64
+        }
+
+        // OuterMessage field 1 -> InnerMessage
+        guard let innerData = try findField(outerData, targetField: 1) else {
+            return (nil, nil, nil)
+        }
+
+        // InnerMessage field 2 -> InnerMessage2
+        guard let inner2Data = try findField(innerData, targetField: 2) else {
+            return (nil, nil, nil)
+        }
+
+        // InnerMessage2 field 1 -> base64 string of OAuthTokenInfo binary
+        guard let oauthInfoB64Data = try findField(inner2Data, targetField: 1),
+              let oauthInfoB64 = String(data: oauthInfoB64Data, encoding: .utf8),
+              let oauthInfoBinary = Data(base64Encoded: oauthInfoB64) else {
+            return (nil, nil, nil)
+        }
+
+        // OAuthTokenInfo: field 1 access_token, field 3 refresh_token, field 4 Timestamp
+        var accessToken: String?
+        var refreshToken: String?
+        var expiry: Int64?
+
+        if let tokenData = try? findField(oauthInfoBinary, targetField: 1) {
+            accessToken = String(data: tokenData, encoding: .utf8)
+        }
+
+        if let refreshData = try? findField(oauthInfoBinary, targetField: 3) {
+            refreshToken = String(data: refreshData, encoding: .utf8)
+        }
+
+        if let expiryData = try? findField(oauthInfoBinary, targetField: 4) {
+            // Timestamp { field 1: seconds (varint) } — tag byte 0x08
+            if expiryData.count > 1, expiryData[0] == 0x08 {
+                if let (seconds, _) = try? readVarint(expiryData, offset: 1) {
+                    expiry = Int64(bitPattern: seconds)
+                }
+            }
+        }
+
+        return (accessToken, refreshToken, expiry)
+    }
+
     /// Extract OAuth info from protobuf data for display/verification
     /// Uses pattern matching to find the OAuth field since the protobuf is deeply nested
     static func extractOAuthInfo(base64Data: String) throws -> (accessToken: String?, refreshToken: String?, expiry: Int64?) {

@@ -1267,24 +1267,36 @@ final class QuotaViewModel {
     }
 
     private func refreshAntigravityQuotasInternal() async {
-        // Fetch both quotas and subscriptions in one call (avoids duplicate API calls)
+        guard !antigravitySwitcher.switchState.isInProgress else {
+            Log.quota("[refresh] skipped — switch in progress")
+            return
+        }
         let (quotas, subscriptions) = await antigravityFetcher.fetchAllAntigravityData()
-        
+
         providerQuotas[.antigravity] = quotas
-        
-        // Merge instead of replace to preserve data if API fails
+
         var providerInfos = subscriptionInfos[.antigravity] ?? [:]
         for (email, info) in subscriptions {
             providerInfos[email] = info
         }
         subscriptionInfos[.antigravity] = providerInfos
-        
-        // Detect active account in IDE (reads email directly from database)
-        await antigravitySwitcher.detectActiveAccount()
+
+        let newFileMaterialized = await antigravitySwitcher.detectActiveAccount()
+
+        if newFileMaterialized {
+            await loadDirectAuthFiles()
+            let (freshQuotas, freshSubscriptions) = await antigravityFetcher.fetchAllAntigravityData()
+            providerQuotas[.antigravity] = freshQuotas
+            var freshInfos = subscriptionInfos[.antigravity] ?? [:]
+            for (email, info) in freshSubscriptions {
+                freshInfos[email] = info
+            }
+            subscriptionInfos[.antigravity] = freshInfos
+        }
     }
     
-    /// Refresh Antigravity quotas without re-detecting active account
-    /// Used after switching accounts (active account already set by switch operation)
+    /// Refresh Antigravity quotas without re-detecting active account.
+    /// Active-account reconciliation (re-reading DB truth) happens in the caller before this helper is invoked.
     private func refreshAntigravityQuotasWithoutDetect() async {
         let (quotas, subscriptions) = await antigravityFetcher.fetchAllAntigravityData()
         
@@ -1295,26 +1307,104 @@ final class QuotaViewModel {
             providerInfos[email] = info
         }
         subscriptionInfos[.antigravity] = providerInfos
-        // Note: Don't call detectActiveAccount() here - already set by switch operation
     }
     
     // MARK: - Antigravity Account Switching
-    
-    /// Check if an Antigravity account is currently active in the IDE
-    /// Simply compares email from database with the given email
+
+    /// Normalize an Antigravity identifier so that both a canonical email
+    /// ("user@gmail.com") and a filename-style string
+    /// ("antigravity-user@gmail.com.json") resolve to the same value.
+    /// Steps: trim whitespace → strip leading "antigravity-" → strip trailing ".json".
+    private func normalizeAntigravityIdentifier(_ identifier: String) -> String {
+        var s = identifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if s.hasPrefix("antigravity-") {
+            s = String(s.dropFirst("antigravity-".count))
+        }
+        if s.hasSuffix(".json") {
+            s = String(s.dropLast(".json".count))
+        }
+        
+        func getStem(_ name: String) -> String {
+            var n = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if n.hasPrefix("antigravity-") {
+                n = String(n.dropFirst("antigravity-".count))
+            }
+            if n.hasSuffix(".json") {
+                n = String(n.dropLast(".json".count))
+            }
+            return n
+        }
+        
+        // 1. Probe authFiles
+        for file in authFiles where file.providerType == .antigravity {
+            if let email = file.email, !email.isEmpty {
+                let canonicalEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if s == getStem(file.name) || s == canonicalEmail {
+                    return canonicalEmail
+                }
+            }
+        }
+        
+        // 2. Probe directAuthFiles
+        for file in directAuthFiles where file.provider == .antigravity {
+            if let email = file.email, !email.isEmpty {
+                let canonicalEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if s == getStem(file.filename) || s == canonicalEmail {
+                    return canonicalEmail
+                }
+            }
+        }
+        
+        // Canonicalize sanitized underscores back into email formats as fallback
+        if !s.contains("@") {
+            s = s.replacingOccurrences(of: "_gmail_com", with: "@gmail.com")
+                 .replacingOccurrences(of: "_gmail", with: "@gmail")
+            if !s.contains("@"), let lastUnderscore = s.lastIndex(of: "_") {
+                var temp = s
+                temp.replaceSubrange(lastUnderscore...lastUnderscore, with: ".")
+                if let nextLast = temp.lastIndex(of: "_") {
+                    temp.replaceSubrange(nextLast...nextLast, with: "@")
+                }
+                s = temp
+            }
+        }
+        return s
+    }
+
+    /// Check if an Antigravity account is currently active in the IDE.
+    /// Accepts either a canonical email or a filename-style identifier.
     func isAntigravityAccountActive(email: String) -> Bool {
-        return antigravitySwitcher.isActiveAccount(email: email)
+        return antigravitySwitcher.isActiveAccount(email: normalizeAntigravityIdentifier(email))
     }
     
-    /// Switch Antigravity account in the IDE
+    private func reloadAuthFiles() async {
+        guard let client = apiClient else { return }
+        guard let newAuthFiles = try? await client.fetchAuthFiles() else { return }
+        let oldNames = Set(self.authFiles.map { $0.name })
+        let newNames = Set(newAuthFiles.map { $0.name })
+        if oldNames != newNames {
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.authFilesChangedKey)
+        }
+        self.authFiles = newAuthFiles
+    }
+
+    /// Switch Antigravity account in the IDE application session.
+    /// This switches the active app account and updates credentials in the macOS keychain.
     func switchAntigravityAccount(email: String) async {
+        let email = normalizeAntigravityIdentifier(email)
         await antigravitySwitcher.executeSwitchForEmail(email)
 
-        // Refresh to update active account
-        if case .success = antigravitySwitcher.switchState {
+        // Post-switch refresh responsibilities
+        switch antigravitySwitcher.switchState {
+        case .success, .partialSuccess:
+            await reloadAuthFiles()
             await refreshAntigravityQuotasWithoutDetect()
+        default:
+            break
         }
     }
+
+
     
     /// Begin the switch confirmation flow
     func beginAntigravitySwitch(accountId: String, email: String) {

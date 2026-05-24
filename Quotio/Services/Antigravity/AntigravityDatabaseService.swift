@@ -2,33 +2,54 @@
 //  AntigravityDatabaseService.swift
 //  Quotio
 //
-//  Handles reading/writing to Antigravity IDE's SQLite database
+//  Handles reading/writing to Antigravity's SQLite database
 //  for token injection and active account detection.
 //
 
 import Foundation
 import SQLite3
 
-/// Service for interacting with Antigravity IDE's state database
+/// Service for interacting with Antigravity's state database
 actor AntigravityDatabaseService {
     
     // MARK: - Constants
     
-    private static let databasePath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Antigravity/User/globalStorage/state.vscdb")
+    private static let dbRelativePath = "User/globalStorage/state.vscdb"
+
+    private static var databasePath: URL {
+        AntigravityPaths.resolvedAppSupportBase().appendingPathComponent(dbRelativePath)
+    }
     
-    private static let backupPath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Antigravity/User/globalStorage/state.vscdb.quotio.backup")
+    private static var backupPath: URL {
+        AntigravityPaths.resolvedAppSupportBase().appendingPathComponent("User/globalStorage/state.vscdb.quotio.backup")
+    }
     
-    private static let walPath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Antigravity/User/globalStorage/state.vscdb-wal")
+    private static var walPath: URL {
+        AntigravityPaths.resolvedAppSupportBase().appendingPathComponent("User/globalStorage/state.vscdb-wal")
+    }
     
-    private static let shmPath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Antigravity/User/globalStorage/state.vscdb-shm")
+    private static var shmPath: URL {
+        AntigravityPaths.resolvedAppSupportBase().appendingPathComponent("User/globalStorage/state.vscdb-shm")
+    }
     
     private static let oldFormatKey = "jetskiStateSync.agentManagerInitState"
     private static let newFormatKey = "antigravityUnifiedStateSync.oauthToken"
+    private static let userStatusKey = "antigravityUnifiedStateSync.userStatus"
+    private static let staleGoogleKey = "google.antigravity"
     private static let serviceMachineIdKey = "storage.serviceMachineId"
+    
+    // MARK: - DB Shape Probe
+    
+    private struct DBShapeFlags: Sendable {
+        let hasOldKey: Bool
+        let hasNewKey: Bool
+    }
+    
+    private func probeDBShape(db: OpaquePointer) -> DBShapeFlags {
+        let hasOld = (try? readValue(forKey: Self.oldFormatKey, db: db)).flatMap { $0.isEmpty ? nil : $0 } != nil
+        let hasNew = (try? readValue(forKey: Self.newFormatKey, db: db)).flatMap { $0.isEmpty ? nil : $0 } != nil
+        return DBShapeFlags(hasOldKey: hasOld, hasNewKey: hasNew)
+    }
     
     // MARK: - Errors
     
@@ -44,9 +65,9 @@ actor AntigravityDatabaseService {
         var errorDescription: String? {
             switch self {
             case .databaseNotFound:
-                return "Antigravity IDE database not found. Please ensure Antigravity is installed."
+                return "Antigravity database not found. Please launch Antigravity once to initialize it."
             case .stateNotFound:
-                return "State data not found in database. Please log in to Antigravity IDE first."
+                return "State data not found in database. Please log in to Antigravity first."
             case .backupFailed(let error):
                 return "Failed to create backup: \(error.localizedDescription)"
             case .restoreFailed(let error):
@@ -174,6 +195,30 @@ actor AntigravityDatabaseService {
             throw DatabaseError.writeFailed(sqliteError(db, code: stepResult))
         }
     }
+
+    private func deleteValue(forKey key: String, db: OpaquePointer) throws {
+        let sql = "DELETE FROM ItemTable WHERE key = ?;"
+        var statement: OpaquePointer?
+
+        let prepareResult = sqlite3_prepare_v2(db, sql, -1, &statement, nil)
+        try handleSQLiteResult(prepareResult, db: db)
+        defer { sqlite3_finalize(statement) }
+
+        let bindResult = key.withCString { sqlite3_bind_text(statement, 1, $0, -1, Self.sqliteTransient) }
+        guard bindResult == SQLITE_OK else {
+            throw DatabaseError.writeFailed(sqliteError(db, code: bindResult))
+        }
+
+        let stepResult = sqlite3_step(statement)
+        switch stepResult {
+        case SQLITE_DONE:
+            return
+        case SQLITE_BUSY, SQLITE_LOCKED:
+            throw DatabaseError.timeout
+        default:
+            throw DatabaseError.writeFailed(sqliteError(db, code: stepResult))
+        }
+    }
     
     /// Read current state value from database (returns base64 string)
     func readStateValue() async throws -> String {
@@ -252,7 +297,7 @@ actor AntigravityDatabaseService {
     }
     
     /// Remove WAL and SHM files to release database locks
-    /// Should be called after IDE termination
+    /// Should be called after Antigravity termination
     func cleanupWALFiles() async {
         try? FileManager.default.removeItem(at: Self.walPath)
         try? FileManager.default.removeItem(at: Self.shmPath)
@@ -269,7 +314,7 @@ actor AntigravityDatabaseService {
         let apiKey: String?  // This is actually the access_token
     }
     
-    /// Get the email of currently active account in IDE
+    /// Get the email of currently active account in Antigravity
     /// Reads from antigravityAuthStatus which contains {email, name, apiKey}
     func getActiveEmail() async throws -> String? {
         guard databaseExists() else {
@@ -356,16 +401,36 @@ actor AntigravityDatabaseService {
                 }
             }
             
+            let shape = probeDBShape(db: db)
+            
+            let shouldWriteNew: Bool
+            let shouldWriteOld: Bool
+            
             switch versionFormat {
             case .newFormat:
+                shouldWriteNew = true
+                shouldWriteOld = shape.hasOldKey
+            case .oldFormat:
+                shouldWriteNew = shape.hasNewKey
+                shouldWriteOld = true
+            case .unknown:
+                shouldWriteNew = true
+                shouldWriteOld = shape.hasOldKey
+            }
+            
+            if shouldWriteNew {
                 try injectNewFormat(
                     accessToken: accessToken,
                     refreshToken: refreshToken,
                     expiry: expiry,
                     db: db
                 )
-                
-            case .oldFormat:
+                let userStatusPayload = AntigravityProtobufHandler.createUserStatusPayload(email: email)
+                try writeValue(userStatusPayload, forKey: Self.userStatusKey, db: db)
+                try deleteValue(forKey: Self.staleGoogleKey, db: db)
+            }
+            
+            if shouldWriteOld {
                 try injectOldFormat(
                     accessToken: accessToken,
                     refreshToken: refreshToken,
@@ -373,32 +438,9 @@ actor AntigravityDatabaseService {
                     email: email,
                     db: db
                 )
-                
-            case .unknown:
-                // Dual fallback: try both formats
-                let newFormatResult = Result {
-                    try injectNewFormat(
-                        accessToken: accessToken,
-                        refreshToken: refreshToken,
-                        expiry: expiry,
-                        db: db
-                    )
-                }
-                let oldFormatResult = Result {
-                    try injectOldFormat(
-                        accessToken: accessToken,
-                        refreshToken: refreshToken,
-                        expiry: expiry,
-                        email: email,
-                        db: db
-                    )
-                }
-                
-                if case .failure = newFormatResult, case .failure(let oldErr) = oldFormatResult {
-                    throw oldErr
-                }
             }
             
+            try injectAuthStatus(email: email, accessToken: accessToken, db: db)
             try writeValue("true", forKey: "antigravityOnboarding", db: db)
             try executeSimpleStatement("COMMIT;", db: db)
             shouldRollback = false
@@ -448,9 +490,24 @@ actor AntigravityDatabaseService {
         try writeValue(newState, forKey: Self.oldFormatKey, db: db)
     }
     
+    private func injectAuthStatus(email: String, accessToken: String, db: OpaquePointer) throws {
+        struct AuthStatusPayload: Encodable {
+            let email: String
+            let name: String
+            let apiKey: String
+        }
+        let payload = AuthStatusPayload(email: email, name: "", apiKey: accessToken)
+        guard let jsonString = String(
+            data: (try? JSONEncoder().encode(payload)) ?? Data(),
+            encoding: .utf8
+        ), !jsonString.isEmpty else {
+            return
+        }
+        try writeValue(jsonString, forKey: Self.authStatusKey, db: db)
+    }
+    
     // MARK: - ServiceMachineId Sync
     
-    /// Sync storage.serviceMachineId into state.vscdb ItemTable
     func syncServiceMachineId(_ machineId: String) async throws {
         guard databaseExists() else { return }
         try withDatabase(readOnly: false) { db in
@@ -458,9 +515,29 @@ actor AntigravityDatabaseService {
         }
     }
     
-    /// Get current token info from database (for detecting active account)
+    /// Get current token info from database (for detecting active account).
+    /// Prefers the new-format key; falls back to the old-format key.
     func getCurrentTokenInfo() async throws -> (accessToken: String?, refreshToken: String?, expiry: Int64?) {
-        let currentState = try await readStateValue()
-        return try AntigravityProtobufHandler.extractOAuthInfo(base64Data: currentState)
+        guard databaseExists() else {
+            throw DatabaseError.databaseNotFound
+        }
+
+        let (newValue, oldValue) = try withDatabase(readOnly: true) { db in
+            let n = try readValue(forKey: Self.newFormatKey, db: db)
+            let o = try readValue(forKey: Self.oldFormatKey, db: db)
+            return (n, o)
+        }
+
+        if let newRaw = newValue, !newRaw.isEmpty,
+           let result = try? AntigravityProtobufHandler.extractOAuthInfoFromNewFormat(base64Data: newRaw),
+           result.accessToken != nil {
+            return result
+        }
+
+        if let oldRaw = oldValue, !oldRaw.isEmpty {
+            return try AntigravityProtobufHandler.extractOAuthInfo(base64Data: oldRaw)
+        }
+
+        throw DatabaseError.stateNotFound
     }
 }

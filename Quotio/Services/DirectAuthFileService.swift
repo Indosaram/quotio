@@ -312,8 +312,16 @@ actor DirectAuthFileService {
         
         // Different providers store tokens differently
         switch file.provider {
-        case .antigravity, .gemini:
-            // Google OAuth format
+        case .antigravity:
+            // Antigravity OAuth format — expiry field is "expired" (ISO8601 string)
+            if let accessToken = json["access_token"] as? String {
+                let refreshToken = json["refresh_token"] as? String
+                let expiresAt = json["expired"] as? String
+                return AuthTokenData(accessToken: accessToken, refreshToken: refreshToken, expiresAt: expiresAt, clientId: nil, clientSecret: nil, authMethod: nil, extras: nil)
+            }
+
+        case .gemini:
+            // Gemini OAuth format — expiry field is "expiry" or "expires_at"
             if let accessToken = json["access_token"] as? String {
                 let refreshToken = json["refresh_token"] as? String
                 let expiresAt = json["expiry"] as? String ?? json["expires_at"] as? String

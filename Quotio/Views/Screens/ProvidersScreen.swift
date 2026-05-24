@@ -24,7 +24,7 @@ struct ProvidersScreen: View {
     @State private var showWarpConnectionSheet = false
     @State private var editingWarpToken: WarpService.WarpToken?
     @State private var showAddProviderPopover = false
-    @State private var switchingAccount: AccountRowData?
+    @State private var switchingAccount: PendingAntigravitySwitch?
     @State private var modeManager = OperatingModeManager.shared
 
     private let customProviderService = CustomProviderService.shared
@@ -218,9 +218,9 @@ struct ProvidersScreen: View {
                 }
             )
         }
-        .sheet(item: $switchingAccount) { account in
+        .sheet(item: $switchingAccount) { pending in
             SwitchAccountSheet(
-                accountEmail: account.displayName,
+                accountEmail: pending.email,
                 onDismiss: {
                     switchingAccount = nil
                 }
@@ -295,8 +295,8 @@ struct ProvidersScreen: View {
                                 handleEditWarpAccount(account)
                             }
                         },
-                        onSwitchAccount: provider == .antigravity ? { account in
-                            switchingAccount = account
+                         onSwitchAccount: provider == .antigravity ? { account in
+                            switchingAccount = PendingAntigravitySwitch(email: account.displayName)
                         } : nil,
                         onToggleDisabled: { account in
                             Task { await toggleAccountDisabled(account) }
@@ -1032,6 +1032,16 @@ private struct OAuthStatusView: View {
         }
         .frame(minHeight: 100)
     }
+}
+
+// MARK: - Antigravity Switch Sheet Item
+
+/// Stable sheet identity keyed only on the account email.
+/// Using AccountRowData directly caused the sheet to dismiss/recreate when
+/// AccountRowData.status or isDisabled mutated mid-switch (sheet identity instability).
+struct PendingAntigravitySwitch: Identifiable, Equatable {
+    let email: String
+    var id: String { email }
 }
 
 // MARK: - Custom Provider Sheet Mode

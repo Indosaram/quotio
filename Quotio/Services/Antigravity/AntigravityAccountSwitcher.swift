@@ -3,10 +3,13 @@
 //  Quotio
 //
 //  Orchestrates the account switching flow for Antigravity IDE.
-//  Coordinates database backup, token injection, and IDE restart.
+//  Coordinates database backup, token injection, keychain update, and IDE restart.
+//  (Switch and Quota only - no CLI routing mutations)
 //
 
 import Foundation
+
+
 
 /// Orchestrates Antigravity account switching with proper error handling and rollback
 @MainActor
@@ -37,6 +40,7 @@ final class AntigravityAccountSwitcher {
     
     var switchState: AccountSwitchState = .idle
     var currentActiveAccount: AntigravityActiveAccount?
+
     
     // MARK: - Errors
     
@@ -75,22 +79,41 @@ final class AntigravityAccountSwitcher {
         processManager.isRunning()
     }
     
-    /// Detect the currently active account in Antigravity IDE
-    /// Reads email directly from antigravityAuthStatus in the database
-    func detectActiveAccount() async {
+    /// Detect the currently active account in Antigravity IDE.
+    /// Reads email directly from antigravityAuthStatus in the database.
+    /// Returns `true` if reconcile materialised a new auth file that did not exist before.
+    @discardableResult
+    func detectActiveAccount() async -> Bool {
+        guard !switchState.isInProgress else { return false }
+        return await detectActiveAccountUnguarded(force: false)
+    }
+
+    @discardableResult
+    private func detectActiveAccountUnguarded(force: Bool = false) async -> Bool {
         do {
             guard let activeEmail = try await databaseService.getActiveEmail(),
                   !activeEmail.isEmpty else {
                 currentActiveAccount = nil
-                return
+                return false
             }
-            
+
             currentActiveAccount = AntigravityActiveAccount(
                 email: activeEmail,
                 detectedAt: Date()
             )
+
+            let authDir = NSString(string: "~/.cli-proxy-api").expandingTildeInPath
+            let targetPath = (authDir as NSString).appendingPathComponent("antigravity-\(activeEmail).json")
+            let fileExistedBefore = FileManager.default.fileExists(atPath: targetPath)
+
+            await reconcileAuthFileFromDB(email: activeEmail, force: force)
+
+            let fileExistsAfter = FileManager.default.fileExists(atPath: targetPath)
+            return !fileExistedBefore && fileExistsAfter
         } catch {
+            Log.quota("[detectActiveAccount] error reading DB: \(error)")
             currentActiveAccount = nil
+            return false
         }
     }
     
@@ -115,6 +138,8 @@ final class AntigravityAccountSwitcher {
     ///   - authFilePath: Path to the Antigravity auth file (e.g., ~/.cli-proxy-api/antigravity-user@gmail.com.json)
     ///   - shouldRestartIDE: Whether to restart the IDE after injection (only if it was running)
     func executeSwitch(authFilePath: String, shouldRestartIDE: Bool = true) async {
+        switchState = .switching(progress: .refreshingToken)
+        
         let url = URL(fileURLWithPath: (authFilePath as NSString).expandingTildeInPath)
         guard let data = try? Data(contentsOf: url),
               var authFile = try? JSONDecoder().decode(AntigravityAuthFile.self, from: data) else {
@@ -130,7 +155,7 @@ final class AntigravityAccountSwitcher {
                 do {
                     let freshToken = try await quotaFetcher.refreshAccessToken(refreshToken: refreshToken)
                     authFile.accessToken = freshToken
-                    authFile.expired = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+                    authFile.expired = cliExpiryString(from: Date().addingTimeInterval(3600))
 
                     // Use read-modify-write to preserve all existing fields (including `disabled`)
                     if let originalData = try? Data(contentsOf: url),
@@ -138,7 +163,16 @@ final class AntigravityAccountSwitcher {
                         json["access_token"] = freshToken
                         json["expired"] = authFile.expired
                         if let updatedData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
-                            try? updatedData.write(to: url)
+                            let tmpURL = url.deletingLastPathComponent().appendingPathComponent(".tmp-\(UUID().uuidString)")
+                            let fm = FileManager.default
+                            do {
+                                try updatedData.write(to: tmpURL, options: .atomic)
+                                try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmpURL.path)
+                                _ = try? fm.replaceItem(at: url, withItemAt: tmpURL, backupItemName: nil, options: [], resultingItemURL: nil)
+                                if fm.fileExists(atPath: tmpURL.path) { try? fm.removeItem(at: tmpURL) }
+                            } catch {
+                                try? fm.removeItem(at: tmpURL)
+                            }
                         }
                     }
                 } catch {
@@ -160,7 +194,10 @@ final class AntigravityAccountSwitcher {
             if wasIDERunning {
                 switchState = .switching(progress: .closingIDE)
             }
-            _ = await processManager.terminateAllProcesses()
+            let terminated = await processManager.terminateAllProcesses()
+            if !terminated && processManager.isRunning() {
+                throw SwitchError.processError(AntigravityProcessManager.ProcessError.terminationFailed)
+            }
 
             await databaseService.cleanupWALFiles()
 
@@ -184,7 +221,7 @@ final class AntigravityAccountSwitcher {
             }
 
             // Step 4: Inject device profile into storage.json
-            switchState = .switching(progress: .injectingToken)
+            switchState = .switching(progress: .injectingCredentials)
 
             let deviceProfile = await deviceManager.loadOrCreateProfile(forEmail: authFile.email)
             do {
@@ -217,6 +254,21 @@ final class AntigravityAccountSwitcher {
                 versionFormat: versionFormat
             )
 
+            let expiryStringForCLI: String
+            if let expired = authFile.expired {
+                expiryStringForCLI = expired
+            } else {
+                expiryStringForCLI = cliExpiryString(from: Date(timeIntervalSince1970: TimeInterval(expiry)))
+            }
+            let keychainSyncOK = KeychainHelper.saveAntigravityCLICredential(
+                accessToken: authFile.accessToken,
+                refreshToken: authFile.refreshToken ?? "",
+                expiry: expiryStringForCLI
+            )
+            if !keychainSyncOK {
+                Log.warning("[executeSwitch] non-fatal: failed to update Antigravity CLI keychain")
+            }
+
             // Check cancellation
             guard !Task.isCancelled else {
                 switchState = .idle
@@ -232,16 +284,20 @@ final class AntigravityAccountSwitcher {
             // Step 7: Clean up
             await databaseService.removeBackup()
 
-            currentActiveAccount = AntigravityActiveAccount(
-                email: authFile.email,
-                detectedAt: Date()
-            )
+            await detectActiveAccountUnguarded(force: true)
 
             let accountId = url.lastPathComponent
                 .replacingOccurrences(of: "antigravity-", with: "")
                 .replacingOccurrences(of: ".json", with: "")
 
-            switchState = .success(accountId: accountId)
+            if keychainSyncOK {
+                switchState = .success(accountId: accountId)
+            } else {
+                switchState = .partialSuccess(
+                    accountId: accountId,
+                    routingIssue: "CLI keychain sync failed"
+                )
+            }
             
         } catch {
             if await databaseService.backupExists() {
@@ -251,7 +307,8 @@ final class AntigravityAccountSwitcher {
                     Log.error("Rollback failed: \(error)")
                 }
             }
-            
+
+            await detectActiveAccountUnguarded(force: true)
             switchState = .failed(message: error.localizedDescription)
         }
     }
@@ -296,12 +353,153 @@ final class AntigravityAccountSwitcher {
             }
         }
         
+        if foundPath == nil {
+            foundPath = await reconcileAuthFileFromDB(email: email, authDir: authDir)
+        }
+
         guard let authFilePath = foundPath else {
             switchState = .failed(message: "Auth file not found for \(email)")
             return
         }
         
         await executeSwitch(authFilePath: authFilePath)
+    }
+
+    // MARK: - Helpers
+
+    /// Formats a Date as an ISO8601 string with fractional seconds, matching the
+    /// RFC3339Nano format produced by the live Antigravity CLI Go binary
+    /// (e.g. "2026-05-24T12:34:56.789012345Z").
+    private func cliExpiryString(from date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+
+    // MARK: -
+
+    /// Materialise or refresh a `~/.cli-proxy-api/antigravity-<email>.json` from the live
+    /// Antigravity DB session.  Only acts when the DB active email matches `email`
+    /// (case-insensitive, trimmed).  Uses read-modify-write so unrelated fields
+    /// (`disabled`, `prefix`, `project_id`, `proxy_url`) are preserved.
+    /// Returns the file path on success, nil on any failure.
+    @discardableResult
+    private func reconcileAuthFileFromDB(
+        email: String,
+        authDir: String = "~/.cli-proxy-api",
+        force: Bool = false
+    ) async -> String? {
+        guard force || !switchState.isInProgress else {
+            Log.quota("[reconcile] skipped — switch in progress")
+            return nil
+        }
+        Log.quota("[reconcile] start for \(Log.maskEmail(email))")
+
+        guard let dbEmail = try? await databaseService.getActiveEmail(),
+              !dbEmail.isEmpty,
+              dbEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                == email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        else {
+            Log.quota("[reconcile] DB email mismatch or missing — aborting")
+            return nil
+        }
+
+        guard let tokenInfo = try? await databaseService.getCurrentTokenInfo() else {
+            Log.quota("[reconcile] getCurrentTokenInfo returned nil — aborting")
+            return nil
+        }
+        guard let accessToken = tokenInfo.accessToken, !accessToken.isEmpty else {
+            Log.quota("[reconcile] access_token missing or empty — aborting")
+            return nil
+        }
+
+        let expandedDir = NSString(string: authDir).expandingTildeInPath
+        let targetPath = (expandedDir as NSString).appendingPathComponent("antigravity-\(email).json")
+
+        let now = Date()
+        let expiryDate: Date
+        if let epochSeconds = tokenInfo.expiry {
+            expiryDate = Date(timeIntervalSince1970: TimeInterval(epochSeconds))
+        } else {
+            expiryDate = now.addingTimeInterval(3600)
+        }
+        let expiresIn = max(0, Int(expiryDate.timeIntervalSince(now)))
+        let expiredString = cliExpiryString(from: expiryDate)
+        let timestampMs = Int(now.timeIntervalSince1970 * 1000)
+
+        let fm = FileManager.default
+
+        if !fm.fileExists(atPath: expandedDir) {
+            try? fm.createDirectory(atPath: expandedDir, withIntermediateDirectories: true)
+        }
+
+        let url = URL(fileURLWithPath: targetPath)
+
+        var json: [String: Any]
+        var existingMatches = false
+        if fm.fileExists(atPath: targetPath),
+           let existingData = try? Data(contentsOf: url),
+           let existing = try? JSONSerialization.jsonObject(with: existingData) as? [String: Any] {
+            json = existing
+            
+            let extAccessToken = existing["access_token"] as? String
+            let extEmail = existing["email"] as? String
+            let extExpired = existing["expired"] as? String
+            let extRefreshToken = existing["refresh_token"] as? String
+            
+            let newRefreshToken = tokenInfo.refreshToken ?? ""
+            
+            if extAccessToken == accessToken,
+               extEmail == email,
+               extExpired == expiredString,
+               (extRefreshToken ?? "") == newRefreshToken {
+                existingMatches = true
+            }
+        } else {
+            json = [:]
+        }
+
+        if existingMatches {
+            Log.quota("[reconcile] auth file is identical on disk — skipping write: \(targetPath)")
+            return targetPath
+        }
+
+        json["access_token"] = accessToken
+        json["email"] = email
+        json["expired"] = expiredString
+        json["expires_in"] = expiresIn
+        json["timestamp"] = timestampMs
+        json["type"] = "antigravity"
+        if let refreshToken = tokenInfo.refreshToken, !refreshToken.isEmpty {
+            json["refresh_token"] = refreshToken
+        }
+        if json["disabled"] == nil {
+            json["disabled"] = false
+        }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) else {
+            return nil
+        }
+
+        let tmpURL = url.deletingLastPathComponent().appendingPathComponent(".tmp-\(UUID().uuidString)")
+        do {
+            try data.write(to: tmpURL, options: .atomic)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmpURL.path)
+            _ = try? fm.replaceItem(at: url, withItemAt: tmpURL, backupItemName: nil, options: [], resultingItemURL: nil)
+            if fm.fileExists(atPath: tmpURL.path) {
+                try? fm.removeItem(at: tmpURL)
+            }
+        } catch {
+            try? fm.removeItem(at: tmpURL)
+            return nil
+        }
+
+        Log.quota("[reconcile] wrote auth file: \(targetPath)")
+        // Keychain write intentionally omitted here — background reconcile must not
+        // touch the external keychain item on every timer tick. Keychain sync only
+        // happens in executeSwitch and persistRefreshedToken.
+
+        return targetPath
     }
     
     /// Retry the last failed switch

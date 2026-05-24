@@ -2,7 +2,7 @@
 //  AntigravityDeviceManager.swift
 //  Quotio
 //
-//  Manages device fingerprint profiles for Antigravity IDE account switching.
+//  Manages device fingerprint profiles for Antigravity account switching.
 //  Each account gets a unique device profile written to storage.json to prevent
 //  session conflicts when switching between accounts.
 //
@@ -22,8 +22,11 @@ actor AntigravityDeviceManager {
     
     // MARK: - Paths
     
-    private static let storagePath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Antigravity/User/globalStorage/storage.json")
+    private static let storageRelativePath = "User/globalStorage/storage.json"
+
+    private static var storagePath: URL {
+        AntigravityPaths.resolvedAppSupportBase().appendingPathComponent(storageRelativePath)
+    }
     
     private static let profileStorageDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".quotio/antigravity-profiles")

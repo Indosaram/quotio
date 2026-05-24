@@ -11,6 +11,121 @@ import Security
 // MARK: - Keychain Helper
 
 enum KeychainHelper {
+    // MARK: - Antigravity CLI Keychain Support
+
+    // These identifiers intentionally match the external Antigravity CLI go-keyring contract
+    // (service = "gemini", account = "antigravity"). Do not rename them casually — any change
+    // here must be coordinated with the upstream CLI binary or the keychain item will be orphaned.
+    private static let antigravityCLIService = "gemini"
+    private static let antigravityCLIAccount = "antigravity"
+
+    // Process-local cache of the last successfully written credential triple.
+    // Skips identical consecutive writes without touching the keychain.
+    private nonisolated(unsafe) static var lastWrittenCLICredential: (accessToken: String, refreshToken: String, expiry: String)? = nil
+
+    private struct AntigravityCLIToken: Codable {
+        let accessToken: String
+        let tokenType: String
+        let refreshToken: String
+        let expiry: String
+
+        enum CodingKeys: String, CodingKey {
+            case accessToken = "access_token"
+            case tokenType = "token_type"
+            case refreshToken = "refresh_token"
+            case expiry
+        }
+    }
+
+    private struct AntigravityCLIPayload: Codable {
+        let token: AntigravityCLIToken
+        let authMethod: String
+
+        enum CodingKeys: String, CodingKey {
+            case token
+            case authMethod = "auth_method"
+        }
+    }
+
+    @discardableResult
+    static func saveAntigravityCLICredential(
+        accessToken: String,
+        refreshToken: String,
+        expiry: String
+    ) -> Bool {
+        // Skip write if values are identical to what was last successfully written
+        if let last = lastWrittenCLICredential,
+           last.accessToken == accessToken,
+           last.refreshToken == refreshToken,
+           last.expiry == expiry {
+            return true
+        }
+
+        let payload = AntigravityCLIPayload(
+            token: AntigravityCLIToken(
+                accessToken: accessToken,
+                tokenType: "Bearer",
+                refreshToken: refreshToken,
+                expiry: expiry
+            ),
+            authMethod: "consumer"
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = []
+        guard let jsonData = try? encoder.encode(payload) else {
+            Log.keychain("Antigravity CLI: failed to encode credential payload")
+            return false
+        }
+
+        let base64 = jsonData.base64EncodedString()
+        let raw = "go-keyring-base64:" + base64
+        guard let rawData = raw.data(using: .utf8) else {
+            Log.keychain("Antigravity CLI: failed to convert payload to UTF-8 data")
+            return false
+        }
+
+        let saved = saveData(rawData, service: antigravityCLIService, account: antigravityCLIAccount)
+        if !saved {
+            Log.keychain("Antigravity CLI: failed to save credential to keychain")
+            return false
+        }
+
+        lastWrittenCLICredential = (accessToken: accessToken, refreshToken: refreshToken, expiry: expiry)
+        return true
+    }
+
+    static func getAntigravityCLICredential() -> (accessToken: String, refreshToken: String, expiry: String)? {
+        guard let raw = readString(service: antigravityCLIService, account: antigravityCLIAccount) else {
+            return nil
+        }
+
+        let prefix = "go-keyring-base64:"
+        guard raw.hasPrefix(prefix) else {
+            Log.keychain("Antigravity CLI: unexpected keychain value format")
+            return nil
+        }
+
+        let base64 = String(raw.dropFirst(prefix.count))
+        guard let jsonData = Data(base64Encoded: base64) else {
+            Log.keychain("Antigravity CLI: failed to base64-decode credential")
+            return nil
+        }
+
+        guard let payload = try? JSONDecoder().decode(AntigravityCLIPayload.self, from: jsonData) else {
+            Log.keychain("Antigravity CLI: failed to decode credential JSON")
+            return nil
+        }
+
+        return (
+            accessToken: payload.token.accessToken,
+            refreshToken: payload.token.refreshToken,
+            expiry: payload.token.expiry
+        )
+    }
+
+    // MARK: -
+
     private static let remoteService = "dev.quotio.desktop.remote-management"
     private static let localService = "dev.quotio.desktop.local-management"
     private static let warpService = "dev.quotio.desktop.warp"
@@ -160,9 +275,31 @@ enum KeychainHelper {
 
 
     private static func saveData(_ data: Data, service: String, account: String) -> Bool {
+        let lookupQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+
+        // Prefer in-place update when the item already exists — this avoids delete+add
+        // which can fail on externally-owned items (e.g. the Antigravity CLI keychain entry).
+        let updateAttrs: [String: Any] = [
+            kSecValueData as String: data
+        ]
+        let updateStatus = SecItemUpdate(lookupQuery as CFDictionary, updateAttrs as CFDictionary)
+        if updateStatus == errSecSuccess {
+            return true
+        }
+
+        if updateStatus != errSecItemNotFound {
+            Log.keychain("Keychain update failed (service: \(service), account: \(account)): \(updateStatus)")
+            return false
+        }
+
+        // Item does not exist yet — delete any partial remnant and add fresh.
         deleteData(service: service, account: account)
 
-        let query: [String: Any] = [
+        let addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
@@ -170,12 +307,12 @@ enum KeychainHelper {
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
 
-        let status = SecItemAdd(query as CFDictionary, nil)
-        if status == errSecSuccess {
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus == errSecSuccess {
             return true
         }
 
-        Log.keychain("Keychain save failed (service: \(service), account: \(account)): \(status)")
+        Log.keychain("Keychain save failed (service: \(service), account: \(account)): \(addStatus)")
         return false
     }
 

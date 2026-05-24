@@ -437,7 +437,7 @@ private struct AccountQuotaCardV2: View {
     let isLoading: Bool
     
     @State private var isRefreshing = false
-    @State private var showSwitchSheet = false
+    @State private var switchingAccount: PendingAntigravitySwitch?
     @State private var showModelsDetailSheet = false
 
     /// Check if OAuth is in progress for this provider
@@ -469,7 +469,7 @@ private struct AccountQuotaCardV2: View {
         viewModel.isWarmupEnabled(for: provider, accountKey: account.key)
     }
     
-    /// Check if this Antigravity account is active in IDE
+    /// Check if this Antigravity account is active in Antigravity.app
     private var isActiveInIDE: Bool {
         provider == .antigravity && viewModel.isAntigravityAccountActive(email: account.email)
     }
@@ -616,12 +616,12 @@ private struct AccountQuotaCardV2: View {
                 
                 if provider == .antigravity && !isActiveInIDE {
                     Button {
-                        showSwitchSheet = true
+                        switchingAccount = PendingAntigravitySwitch(email: account.email)
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "arrow.right.square")
                                 .font(.caption)
-                            Text("Use in IDE")
+                            Text("antigravity.useInIDE".localized())
                                 .font(.caption)
                                 .fontWeight(.medium)
                         }
@@ -720,11 +720,11 @@ private struct AccountQuotaCardV2: View {
                 }
             }
         }
-        .sheet(isPresented: $showSwitchSheet) {
+        .sheet(item: $switchingAccount) { pending in
             SwitchAccountSheet(
-                accountEmail: account.email,
+                accountEmail: pending.email,
                 onDismiss: {
-                    showSwitchSheet = false
+                    switchingAccount = nil
                 }
             )
             .environment(viewModel)

@@ -12,16 +12,17 @@ import SwiftUI
 struct SwitchAccountSheet: View {
     @Environment(QuotaViewModel.self) private var viewModel
     @State private var settings = MenuBarSettingsManager.shared
+    private let switcher = AntigravityAccountSwitcher.shared
     
     let accountEmail: String
     let onDismiss: () -> Void
     
     private var switchState: AccountSwitchState {
-        viewModel.antigravitySwitcher.switchState
+        switcher.switchState
     }
     
     private var isIDERunning: Bool {
-        viewModel.antigravitySwitcher.isIDERunning()
+        switcher.isIDERunning()
     }
     
     var body: some View {
@@ -79,6 +80,9 @@ struct SwitchAccountSheet: View {
         case .success:
             successContent
             
+        case .partialSuccess(_, let issue):
+            partialSuccessContent(issue: issue)
+            
         case .failed(let message):
             failureContent(message: message)
         }
@@ -116,9 +120,10 @@ struct SwitchAccountSheet: View {
             
             // Progress steps
             VStack(alignment: .leading, spacing: 8) {
+                progressStep(.refreshingToken, current: progress)
                 progressStep(.closingIDE, current: progress)
                 progressStep(.creatingBackup, current: progress)
-                progressStep(.injectingToken, current: progress)
+                progressStep(.injectingCredentials, current: progress)
                 progressStep(.restartingIDE, current: progress)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -150,18 +155,23 @@ struct SwitchAccountSheet: View {
     
     private func stepOrder(_ step: AccountSwitchState.SwitchProgress) -> Int {
         switch step {
-        case .closingIDE: return 0
-        case .creatingBackup: return 1
-        case .injectingToken: return 2
-        case .restartingIDE: return 3
+        case .refreshingToken: return 0
+        case .closingIDE: return 1
+        case .creatingBackup: return 2
+        case .injectingCredentials: return 3
+        case .restartingIDE: return 4
         }
     }
     
     private func progressText(for progress: AccountSwitchState.SwitchProgress) -> String {
         switch progress {
+        case .refreshingToken:
+            let key = "antigravity.switch.progress.refreshing"
+            let localized = key.localized()
+            return localized == key ? "Preparing token..." : localized
         case .closingIDE: return "antigravity.switch.progress.closing".localized()
         case .creatingBackup: return "antigravity.switch.progress.backup".localized()
-        case .injectingToken: return "antigravity.switch.progress.injecting".localized()
+        case .injectingCredentials: return "antigravity.switch.progress.injecting".localized()
         case .restartingIDE: return "antigravity.switch.progress.restarting".localized()
         }
     }
@@ -175,6 +185,25 @@ struct SwitchAccountSheet: View {
             Text("antigravity.switch.success".localized())
                 .font(.headline)
                 .foregroundStyle(.green)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+
+    private func partialSuccessContent(issue: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(.orange)
+            
+            Text("antigravity.switch.partialSuccess".localized())
+                .font(.headline)
+                .foregroundStyle(.orange)
+            
+            Text(issue)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
@@ -226,7 +255,7 @@ struct SwitchAccountSheet: View {
             // No buttons during switch
             EmptyView()
             
-        case .success:
+        case .success, .partialSuccess:
             Button("action.done".localized()) {
                 viewModel.dismissAntigravitySwitchResult()
                 onDismiss()

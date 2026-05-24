@@ -480,7 +480,7 @@ actor AntigravityQuotaFetcher {
     private let tokenURL = "https://oauth2.googleapis.com/token"
     private let clientId = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
     private let clientSecret = "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"
-    private let userAgent = "antigravity/1.11.3 Darwin/arm64"
+    private let userAgent: String
 
     private var session: URLSession
 
@@ -490,6 +490,13 @@ actor AntigravityQuotaFetcher {
     init() {
         let config = ProxyConfigurationService.createProxiedConfigurationStatic(timeout: 15)
         self.session = URLSession(configuration: config)
+        let detectedVersion = AntigravityVersionDetector.detectVersion()?.shortVersion ?? "1.11.3"
+        #if arch(arm64)
+        let arch = "arm64"
+        #else
+        let arch = "x86_64"
+        #endif
+        self.userAgent = "antigravity/\(detectedVersion) Darwin/\(arch)"
     }
 
     /// Update the URLSession with current proxy settings
@@ -540,7 +547,12 @@ actor AntigravityQuotaFetcher {
 
     /// Persist refreshed access token back to auth file using read-modify-write
     /// to preserve all existing fields (including `disabled`, etc.)
-    private func persistRefreshedToken(at url: URL, originalData: Data, newAccessToken: String, expiresIn: Int) {
+    private func persistRefreshedToken(at url: URL, originalData: Data, newAccessToken: String, expiresIn: Int) async {
+        let isSwitching = await MainActor.run {
+            AntigravityAccountSwitcher.shared.switchState.isInProgress
+        }
+        guard !isSwitching else { return }
+
         guard var json = try? JSONSerialization.jsonObject(with: originalData) as? [String: Any] else { return }
         json["access_token"] = newAccessToken
 
@@ -549,12 +561,25 @@ actor AntigravityQuotaFetcher {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         formatter.timeZone = .current
-        json["expired"] = formatter.string(from: expiryDate)
+        let expiredString = formatter.string(from: expiryDate)
+        json["expired"] = expiredString
         json["expires_in"] = expiresIn
         json["timestamp"] = Int64(now.timeIntervalSince1970 * 1000)
 
         if let updatedData = try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]) {
             try? updatedData.write(to: url)
+        }
+
+        let refreshToken = json["refresh_token"] as? String ?? ""
+        let keychainOK = await MainActor.run {
+            KeychainHelper.saveAntigravityCLICredential(
+                accessToken: newAccessToken,
+                refreshToken: refreshToken,
+                expiry: expiredString
+            )
+        }
+        if !keychainOK {
+            Log.warning("[persistRefreshedToken] non-fatal: failed to update Antigravity CLI keychain")
         }
     }
 
@@ -674,11 +699,12 @@ actor AntigravityQuotaFetcher {
 
         var accessToken = authFile.accessToken
 
-        if authFile.isExpired, let refreshToken = authFile.refreshToken {
+        if authFile.isExpired {
+            guard let refreshToken = authFile.refreshToken else { return nil }
             do {
                 let (token, expiresIn) = try await refreshAccessTokenWithExpiry(refreshToken: refreshToken)
                 accessToken = token
-                persistRefreshedToken(at: url, originalData: data, newAccessToken: accessToken, expiresIn: expiresIn)
+                await persistRefreshedToken(at: url, originalData: data, newAccessToken: accessToken, expiresIn: expiresIn)
             } catch {
                 return nil
             }
@@ -721,13 +747,11 @@ actor AntigravityQuotaFetcher {
         var accessToken = authFile.accessToken
 
         if authFile.isExpired, let refreshToken = authFile.refreshToken {
-            do {
-                let (token, expiresIn) = try await refreshAccessTokenWithExpiry(refreshToken: refreshToken)
-                accessToken = token
-                persistRefreshedToken(at: url, originalData: data, newAccessToken: accessToken, expiresIn: expiresIn)
-            } catch {
-                Log.auth("Token refresh failed: \(error)")
-            }
+            let (token, expiresIn) = try await refreshAccessTokenWithExpiry(refreshToken: refreshToken)
+            accessToken = token
+            await persistRefreshedToken(at: url, originalData: data, newAccessToken: accessToken, expiresIn: expiresIn)
+        } else if authFile.isExpired {
+            throw QuotaFetchError.httpError(401)
         }
 
         return try await fetchQuota(accessToken: accessToken)
@@ -744,17 +768,17 @@ actor AntigravityQuotaFetcher {
 
         var accessToken = authFile.accessToken
 
-        if authFile.isExpired, let refreshToken = authFile.refreshToken {
+        if authFile.isExpired {
+            guard let refreshToken = authFile.refreshToken else { return (nil, nil) }
             do {
                 let (token, expiresIn) = try await refreshAccessTokenWithExpiry(refreshToken: refreshToken)
                 accessToken = token
-                persistRefreshedToken(at: url, originalData: data, newAccessToken: accessToken, expiresIn: expiresIn)
+                await persistRefreshedToken(at: url, originalData: data, newAccessToken: accessToken, expiresIn: expiresIn)
             } catch {
                 return (nil, nil)
             }
         }
 
-        // Fetch quota - this internally calls fetchProjectId which fetches and caches subscription
         var quota: ProviderQuotaData? = nil
         do {
             quota = try await fetchQuota(accessToken: accessToken)
@@ -762,7 +786,6 @@ actor AntigravityQuotaFetcher {
             // Quota fetch failed, but we might still have subscription in cache
         }
 
-        // Get subscription from cache (was fetched during fetchProjectId in fetchQuota)
         let subscription = subscriptionCache[accessToken]
 
         return (quota, subscription)

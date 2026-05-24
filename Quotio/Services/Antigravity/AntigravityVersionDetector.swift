@@ -2,7 +2,7 @@
 //  AntigravityVersionDetector.swift
 //  Quotio
 //
-//  Detects Antigravity IDE version from Info.plist to determine
+//  Detects Antigravity.app version from Info.plist to determine
 //  which protobuf injection format to use.
 //  >= 1.16.5: new format (antigravityUnifiedStateSync.oauthToken)
 //  <  1.16.5: old format (jetskiStateSync.agentManagerInitState)
@@ -11,7 +11,7 @@
 import AppKit
 import Foundation
 
-/// Detects installed Antigravity IDE version for format-aware token injection
+/// Detects installed Antigravity version for format-aware token injection
 nonisolated enum AntigravityVersionDetector {
     
     // MARK: - Types
@@ -32,23 +32,13 @@ nonisolated enum AntigravityVersionDetector {
     private static let newFormatThreshold = "1.16.5"
     
     // MARK: - App Paths
-    
-    /// Known locations for Antigravity.app on macOS
-    private static let appSearchPaths: [String] = [
-        "/Applications/Antigravity.app",
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Applications/Antigravity.app").path
-    ]
-    
-    /// Bundle identifiers for Antigravity IDE
-    private static let bundleIdentifiers = [
-        "com.google.antigravity",
-        "com.todesktop.230313mzl4w4u92"
-    ]
+
+    private static var appSearchPaths: [String] { AntigravityPaths.legacyAppPaths }
+    private static var bundleIdentifiers: [String] { AntigravityPaths.bundleIdentifiers }
     
     // MARK: - Public API
     
-    /// Detect the installed Antigravity IDE version
+    /// Detect the installed Antigravity version
     static func detectVersion() -> Version? {
         // Strategy 1: Find .app bundle directly and read Info.plist
         for path in appSearchPaths {
@@ -60,6 +50,7 @@ nonisolated enum AntigravityVersionDetector {
         // Strategy 2: Find via bundle identifier (NSWorkspace)
         for bundleId in bundleIdentifiers {
             if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId),
+               AntigravityPaths.isAntigravityApp(at: url),
                let version = readVersionFromApp(at: url.path) {
                 return version
             }

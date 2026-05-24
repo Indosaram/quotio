@@ -2459,25 +2459,25 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Using in IDE"
+            "value" : "Active in Antigravity.app"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Utilisé dans l'IDE"
+            "value" : "Actif dans Antigravity.app"
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Đang dùng trong IDE"
+            "value" : "Đang dùng trong Antigravity.app"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 IDE 中使用"
+            "value" : "在 Antigravity.app 中使用"
           }
         }
       }
@@ -2488,25 +2488,25 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Switch to this account in Antigravity IDE?"
+            "value" : "Switch to this account in Antigravity.app? The app will restart."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Passer à ce compte dans Antigravity IDE ?"
+            "value" : "Passer à ce compte dans Antigravity.app ? L'application va redémarrer."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Chuyển sang tài khoản này trong Antigravity IDE?"
+            "value" : "Chuyển sang tài khoản này trong Antigravity.app? Ứng dụng sẽ khởi động lại."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "切换到 Antigravity IDE 中的此账户？"
+            "value" : "切换到 Antigravity.app 中的此账户？应用将重启。"
           }
         }
       }
@@ -2575,25 +2575,25 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Antigravity IDE is running and will be restarted."
+            "value" : "Antigravity.app is running and will be restarted."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Antigravity IDE est en cours d'exécution et sera redémarré."
+            "value" : "Antigravity.app est en cours d'exécution et sera redémarré."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Antigravity IDE đang chạy và sẽ được khởi động lại."
+            "value" : "Antigravity.app đang chạy và sẽ được khởi động lại."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Antigravity IDE 正在运行，将被重启。"
+            "value" : "Antigravity.app 正在运行，将被重启。"
           }
         }
       }
@@ -2633,25 +2633,25 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Antigravity IDE is running and will be restarted."
+            "value" : "Antigravity.app is running and will be restarted."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Antigravity IDE est en cours d'exécution et sera redémarré."
+            "value" : "Antigravity.app est en cours d'exécution et sera redémarré."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Antigravity IDE đang chạy và sẽ được khởi động lại."
+            "value" : "Antigravity.app đang chạy và sẽ được khởi động lại."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Antigravity IDE 正在运行，将被重启。"
+            "value" : "Antigravity.app 正在运行，将被重启。"
           }
         }
       }
@@ -2691,25 +2691,54 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Closing Antigravity IDE..."
+            "value" : "Closing Antigravity.app..."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fermeture d'Antigravity IDE..."
+            "value" : "Fermeture d'Antigravity.app..."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Đang đóng Antigravity IDE..."
+            "value" : "Đang đóng Antigravity.app..."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在关闭 Antigravity IDE..."
+            "value" : "正在关闭 Antigravity.app..."
+          }
+        }
+      }
+    },
+    "antigravity.switch.partialSuccess" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account switched with warnings"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compte changé avec des avertissements"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đã chuyển tài khoản với cảnh báo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "账户切换成功但有警告"
           }
         }
       }
@@ -2720,25 +2749,25 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Switching account..."
+            "value" : "Injecting credentials..."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Changement de compte..."
+            "value" : "Injection des identifiants..."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Đang chuyển tài khoản..."
+            "value" : "Đang nạp thông tin đăng nhập..."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在切换账户..."
+            "value" : "正在注入凭据..."
           }
         }
       }
@@ -2749,25 +2778,54 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Restarting Antigravity IDE..."
+            "value" : "Restarting Antigravity.app..."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Redémarrage d'Antigravity IDE..."
+            "value" : "Redémarrage d'Antigravity.app..."
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Đang khởi động lại Antigravity IDE..."
+            "value" : "Đang khởi động lại Antigravity.app..."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在重启 Antigravity IDE..."
+            "value" : "正在重启 Antigravity.app..."
+          }
+        }
+      }
+    },
+    "antigravity.switch.progress.syncing" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Syncing CLI routing..."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Synchronisation du routage CLI..."
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Đang đồng bộ định tuyến CLI..."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在同步 CLI 路由..."
           }
         }
       }
@@ -2865,25 +2923,25 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Use in IDE"
+            "value" : "Use in Antigravity"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Utiliser dans l'IDE"
+            "value" : "Utiliser dans Antigravity"
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dùng trong IDE"
+            "value" : "Dùng trong Antigravity"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 IDE 中使用"
+            "value" : "在 Antigravity 中使用"
           }
         }
       }
@@ -21001,87 +21059,87 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Use in IDE"
+            "value" : "Use in Antigravity"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Utiliser dans l'IDE"
+            "value" : "Utiliser dans Antigravity"
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dùng trong IDE"
+            "value" : "Dùng trong Antigravity"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 IDE 中使用"
+            "value" : "在 Antigravity 中使用"
           }
         }
       }
     },
     "Use in IDE →" : {
-      "comment" : "A button label that appears when hovering over the \"Use in IDE\" section of an account card.",
+      "comment" : "A button label that appears when hovering over the \"Use in Antigravity\" section of an account card.",
       "extractionState" : "stale",
       "isCommentAutoGenerated" : true,
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Use in IDE →"
+            "value" : "Use in Antigravity →"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Utiliser dans l'IDE →"
+            "value" : "Utiliser dans Antigravity →"
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dùng trong IDE →"
+            "value" : "Dùng trong Antigravity →"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 IDE 中使用 →"
+            "value" : "在 Antigravity 中使用 →"
           }
         }
       }
     },
     "Using in IDE" : {
-      "comment" : "A badge indicating that a user is currently using a specific account in the IDE.",
+      "comment" : "A badge indicating that a user is currently using a specific account in Antigravity.app.",
       "extractionState" : "stale",
       "isCommentAutoGenerated" : true,
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Using in IDE"
+            "value" : "Active in Antigravity.app"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Utilisation dans l'IDE"
+            "value" : "Actif dans Antigravity.app"
           }
         },
         "vi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Đang dùng trong IDE"
+            "value" : "Đang dùng trong Antigravity.app"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在 IDE 中使用"
+            "value" : "在 Antigravity.app 中使用"
           }
         }
       }

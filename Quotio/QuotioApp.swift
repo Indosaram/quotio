@@ -24,6 +24,10 @@ final class AppBootstrap {
     private(set) var hasInitialized = false
     private(set) var needsOnboarding = false
 
+    /// Bridge closure set by the SwiftUI Window scene so AppDelegate / menu can create
+    /// the main window when none exists yet (openWindow environment action).
+    var openWindowAction: (() -> Void)?
+
     private let modeManager = OperatingModeManager.shared
     private let appearanceManager = AppearanceManager.shared
     private let statusBarManager = StatusBarManager.shared
@@ -194,7 +198,11 @@ struct QuotioApp: App {
 
 
     var body: some Scene {
-        Window("Quotio", id: "main") {
+        // Register the openWindow bridge at Scene evaluation time so AppDelegate can
+        // call it even before any window exists (chicken-and-egg fix).
+        bootstrap.openWindowAction = { openWindow(id: "main") }
+
+        return Window("Quotio", id: "main") {
             ContentView()
                 .id(languageManager.currentLanguage) // Force re-render on language change
                 .environment(viewModel)
@@ -335,6 +343,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 getCurrentSource: { CLIProxyManager.shared.selectedBinarySource },
                 getCurrentVersion: { CLIProxyManager.shared.currentVersion ?? CLIProxyManager.shared.installedProxyVersion }
             )
+
+            // When showInDock is true the user expects a window on explicit launch.
+            // Give SwiftUI one run-loop turn to restore a previous window before we
+            // decide to create a new one.
+            if showInDock {
+                DispatchQueue.main.async {
+                    let hasVisibleWindow = NSApp.windows.contains {
+                        $0.canBecomeMain && $0.isVisible && !$0.isMiniaturized
+                    }
+                    if !hasVisibleWindow {
+                        AppBootstrap.shared.openWindowAction?()
+                    }
+                }
+            }
         }
 
         windowWillCloseObserver = NotificationCenter.default.addObserver(
@@ -447,7 +469,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func bringMainWindowToFront(in app: NSApplication) -> Bool {
-        guard let window = mainWindow(in: app) else { return false }
+        guard let window = mainWindow(in: app) else {
+            AppBootstrap.shared.openWindowAction?()
+            return true
+        }
         guard ensureRegularPolicyForMainWindowForeground(in: app) else { return false }
 
         trackedDashboardWindow = window

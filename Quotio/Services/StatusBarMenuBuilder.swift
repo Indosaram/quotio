@@ -293,9 +293,27 @@ final class StatusBarMenuBuilder {
         if response == .alertFirstButtonReturn {
             Task { @MainActor in
                 await viewModel.switchAntigravityAccount(email: email)
+                
+                let finalState = viewModel.antigravitySwitcher.switchState
+                if case .failed(let message) = finalState {
+                    Self.showOutcomeAlert(title: "antigravity.switch.failed".localized(), message: message, style: .critical)
+                } else if case .partialSuccess(_, let issue) = finalState {
+                    Self.showOutcomeAlert(title: "antigravity.switch.partialSuccess".localized(), message: issue, style: .warning)
+                }
+                
+                viewModel.dismissAntigravitySwitchResult()
                 StatusBarManager.shared.rebuildMenuInPlace()
             }
         }
+    }
+    
+    private static func showOutcomeAlert(title: String, message: String, style: NSAlert.Style) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = style
+        alert.addButton(withTitle: "action.ok".localized())
+        alert.runModal()
     }
     
     // MARK: - Empty State
@@ -370,6 +388,8 @@ final class MenuActionHandler: NSObject {
             }
 
             window.orderFrontRegardless()
+        } else {
+            AppBootstrap.shared.openWindowAction?()
         }
     }
 }

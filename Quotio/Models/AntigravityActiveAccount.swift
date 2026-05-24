@@ -2,12 +2,12 @@
 //  AntigravityActiveAccount.swift
 //  Quotio
 //
-//  Model for tracking the currently active Antigravity account in the IDE.
+//  Model for tracking the currently active Antigravity account in Antigravity.app.
 //
 
 import Foundation
 
-/// Represents the currently active Antigravity account in the IDE
+/// Represents the currently active Antigravity account in Antigravity.app
 struct AntigravityActiveAccount: Equatable, Sendable {
     /// Email of the active account (from antigravityAuthStatus in database)
     let email: String
@@ -28,17 +28,23 @@ enum AccountSwitchState: Equatable {
     case confirming(accountId: String, accountEmail: String)
     case switching(progress: SwitchProgress)
     case success(accountId: String)
+    case partialSuccess(accountId: String, routingIssue: String)
     case failed(message: String)
     
     enum SwitchProgress: String, Equatable {
-        case closingIDE = "Closing Antigravity IDE..."
+        case refreshingToken = "Preparing token..."
+        case closingIDE = "Closing Antigravity.app..."
         case creatingBackup = "Creating backup..."
-        case injectingToken = "Injecting token..."
-        case restartingIDE = "Restarting Antigravity IDE..."
+        case injectingCredentials = "Injecting credentials..."
+        case restartingIDE = "Restarting Antigravity.app..."
     }
     
     var isInProgress: Bool {
-        if case .switching = self { return true }
-        return false
+        switch self {
+        case .confirming, .switching:
+            return true
+        default:
+            return false
+        }
     }
 }
