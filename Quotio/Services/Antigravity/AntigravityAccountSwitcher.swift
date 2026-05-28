@@ -254,19 +254,25 @@ final class AntigravityAccountSwitcher {
                 versionFormat: versionFormat
             )
 
-            let expiryStringForCLI: String
-            if let expired = authFile.expired {
-                expiryStringForCLI = expired
+            let keychainSyncOK: Bool
+            if UserDefaults.standard.object(forKey: "syncAntigravityCLI") == nil || UserDefaults.standard.bool(forKey: "syncAntigravityCLI") {
+                let expiryStringForCLI: String
+                if let expired = authFile.expired {
+                    expiryStringForCLI = expired
+                } else {
+                    expiryStringForCLI = cliExpiryString(from: Date(timeIntervalSince1970: TimeInterval(expiry)))
+                }
+                keychainSyncOK = KeychainHelper.saveAntigravityCLICredential(
+                    accessToken: authFile.accessToken,
+                    refreshToken: authFile.refreshToken ?? "",
+                    expiry: expiryStringForCLI
+                )
+                if !keychainSyncOK {
+                    Log.warning("[executeSwitch] non-fatal: failed to update Antigravity CLI keychain")
+                }
             } else {
-                expiryStringForCLI = cliExpiryString(from: Date(timeIntervalSince1970: TimeInterval(expiry)))
-            }
-            let keychainSyncOK = KeychainHelper.saveAntigravityCLICredential(
-                accessToken: authFile.accessToken,
-                refreshToken: authFile.refreshToken ?? "",
-                expiry: expiryStringForCLI
-            )
-            if !keychainSyncOK {
-                Log.warning("[executeSwitch] non-fatal: failed to update Antigravity CLI keychain")
+                keychainSyncOK = true
+                Log.debug("[executeSwitch] skipped Antigravity CLI keychain update (sync disabled)")
             }
 
             // Check cancellation

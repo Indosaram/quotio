@@ -10,6 +10,7 @@ struct SettingsScreen: View {
     @Environment(QuotaViewModel.self) private var viewModel
     @State private var modeManager = OperatingModeManager.shared
     private let launchManager = LaunchAtLoginManager.shared
+    @AppStorage("syncAntigravityCLI") private var syncAntigravityCLI = true
     
     var body: some View {
         @Bindable var lang = LanguageManager.shared
@@ -29,6 +30,16 @@ struct SettingsScreen: View {
                 LaunchAtLoginToggle()
             } header: {
                 Label("settings.general".localized(), systemImage: "gearshape")
+            }
+
+            // Antigravity Settings
+            Section {
+                Toggle("Sync CLI with IDE account".localized(), isOn: $syncAntigravityCLI)
+            } header: {
+                Label("Antigravity IDE", systemImage: "sparkles")
+            } footer: {
+                Text("Automatically update the Antigravity CLI's Keychain credentials when switching the active IDE account.".localized())
+                    .font(.caption)
             }
 
             // Language
