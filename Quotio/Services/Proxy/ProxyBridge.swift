@@ -611,38 +611,36 @@ final class ProxyBridge {
     // MARK: - Metadata Extraction
     
     private nonisolated func extractMetadata(method: String, path: String, body: String) -> (provider: String?, model: String?, method: String, path: String) {
-        // Detect provider from path
         var provider: String?
-        if path.contains("/anthropic/") || path.contains("/claude") {
-            provider = "claude"
-        } else if path.contains("/gemini/") || path.contains("/google/") {
-            provider = "gemini"
-        } else if path.contains("/openai/") || path.contains("/chat/completions") {
-            provider = "openai"
-        } else if path.contains("/copilot/") {
-            provider = "copilot"
-        } else if path.contains("codewhisperer") || path.contains("kiro") {
-            provider = "kiro"
-        }
-        
-        // Extract model from JSON body
         var model: String?
+        
         if let bodyData = body.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
            let modelValue = json["model"] as? String {
             model = modelValue
             
-            // Infer provider from model name if not already detected
-            if provider == nil {
-                if FallbackFormatConverter.isClaudeModel(modelValue) {
-                    provider = "claude"
-                } else if modelValue.hasPrefix("gemini") || modelValue.hasPrefix("models/gemini") {
-                    provider = "gemini"
-                } else if modelValue.hasPrefix("gpt") || modelValue.hasPrefix("o1") || modelValue.hasPrefix("o3") {
-                    provider = "openai"
-                } else if modelValue.contains("kiro") || modelValue.contains("codewhisperer") {
-                    provider = "kiro"
-                }
+            if FallbackFormatConverter.isClaudeModel(modelValue) {
+                provider = "claude"
+            } else if modelValue.hasPrefix("gemini") || modelValue.hasPrefix("models/gemini") {
+                provider = "gemini"
+            } else if modelValue.hasPrefix("gpt") || modelValue.hasPrefix("o1") || modelValue.hasPrefix("o3") {
+                provider = "openai"
+            } else if modelValue.contains("kiro") || modelValue.contains("codewhisperer") {
+                provider = "kiro"
+            }
+        }
+        
+        if provider == nil {
+            if path.contains("/anthropic/") || path.contains("/claude") {
+                provider = "claude"
+            } else if path.contains("/gemini/") || path.contains("/google/") {
+                provider = "gemini"
+            } else if path.contains("/openai/") || path.contains("/chat/completions") {
+                provider = "openai"
+            } else if path.contains("/copilot/") {
+                provider = "copilot"
+            } else if path.contains("codewhisperer") || path.contains("kiro") {
+                provider = "kiro"
             }
         }
         
