@@ -111,14 +111,14 @@ final class StatusBarMenuBuilder {
             }
         }
         
-        // Filter out CLI-based providers only if CLI is not installed AND no quota data exists
-        return providers.filter { provider in
+        let filtered = providers.filter { provider in
             guard let agent = provider.cliAgent else { return true }
             if let quotas = viewModel.providerQuotas[provider], !quotas.isEmpty {
                 return true
             }
             return isCLIInstalled(agent)
-        }.sorted { $0.displayName < $1.displayName }
+        }
+        return MenuBarSettingsManager.shared.sortProviders(Array(filtered))
     }
     
     private func isCLIInstalled(_ agent: CLIAgent) -> Bool {
@@ -185,7 +185,9 @@ final class StatusBarMenuBuilder {
     
     private func accountsForProvider(_ provider: AIProvider) -> [(email: String, data: ProviderQuotaData)] {
         guard let quotas = viewModel.providerQuotas[provider] else { return [] }
-        return quotas.map { ($0.key, $0.value) }.sorted { $0.email < $1.email }
+        let mapped = quotas.map { (email: $0.key, data: $0.value) }
+        let sorted = mapped.sorted { $0.email < $1.email }
+        return MenuBarSettingsManager.shared.sortAccounts(sorted, provider: provider, extractKey: { $0.email })
     }
 
     // MARK: - Header Item

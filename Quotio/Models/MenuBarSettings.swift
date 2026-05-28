@@ -438,6 +438,8 @@ final class MenuBarSettingsManager {
     private let modelAggregationModeKey = "modelAggregationMode"
     private let hasUserModifiedMenuBarKey = "hasUserModifiedMenuBar"
     private let preferredQuotaModelsKey = "menuBarPreferredQuotaModels"
+    private let providerOrderKey = "menuBarProviderOrder"
+    private let accountOrderKey = "menuBarAccountOrder"
 
     static let minMenuBarItems = 1
     static let maxMenuBarItems = 10
@@ -508,6 +510,23 @@ final class MenuBarSettingsManager {
         didSet { savePreferredQuotaModels() }
     }
 
+    /// User-defined display order for providers
+    var providerOrder: [String] {
+        didSet {
+            defaults.set(providerOrder, forKey: providerOrderKey)
+        }
+    }
+
+    /// User-defined display order for accounts per provider
+    /// Key: AIProvider.rawValue, Value: Array of account displayNames/emails in order
+    var accountOrder: [String: [String]] {
+        didSet {
+            if let data = try? JSONEncoder().encode(accountOrder) {
+                defaults.set(data, forKey: accountOrderKey)
+            }
+        }
+    }
+
     /// Check if adding another item would exceed the warning threshold
     /// Warning shows when approaching the limit (at maxItems - 1)
     var shouldWarnOnAdd: Bool {
@@ -556,7 +575,63 @@ final class MenuBarSettingsManager {
         self.hasUserModifiedMenuBar = defaults.bool(forKey: hasUserModifiedMenuBarKey)
         self.preferredQuotaModels = Self.loadPreferredQuotaModels(from: defaults, key: preferredQuotaModelsKey)
 
+        let savedOrder = defaults.stringArray(forKey: providerOrderKey) ?? []
+        let allCases = AIProvider.allCases.map { $0.rawValue }
+        if savedOrder.isEmpty {
+            self.providerOrder = allCases
+        } else {
+            var result = savedOrder
+            for caseValue in allCases {
+                if !result.contains(caseValue) {
+                    result.append(caseValue)
+                }
+            }
+            self.providerOrder = result.filter { allCases.contains($0) }
+        }
+
+        if let data = defaults.data(forKey: accountOrderKey),
+           let order = try? JSONDecoder().decode([String: [String]].self, from: data) {
+            self.accountOrder = order
+        } else {
+            self.accountOrder = [:]
+        }
+
         enforceMaxItems()
+    }
+    
+    /// Sorts an array of AIProviders according to the custom providerOrder
+    func sortProviders(_ providers: [AIProvider]) -> [AIProvider] {
+        return providers.sorted { p1, p2 in
+            let index1 = providerOrder.firstIndex(of: p1.rawValue) ?? Int.max
+            let index2 = providerOrder.firstIndex(of: p2.rawValue) ?? Int.max
+            if index1 != index2 {
+                return index1 < index2
+            }
+            return p1.displayName < p2.displayName
+        }
+    }
+
+    /// Sorts an array of accounts according to the custom accountOrder dictionary
+    func sortAccounts<T>(_ accounts: [T], provider: AIProvider, extractKey: (T) -> String) -> [T] {
+        guard let order = accountOrder[provider.rawValue] else {
+            // Default sort: alphabetical by extracted key
+            return accounts.sorted { extractKey($0).localizedCompare(extractKey($1)) == .orderedAscending }
+        }
+        return accounts.sorted { a1, a2 in
+            let key1 = extractKey(a1)
+            let key2 = extractKey(a2)
+            let index1 = order.firstIndex(of: key1) ?? Int.max
+            let index2 = order.firstIndex(of: key2) ?? Int.max
+            if index1 != index2 {
+                return index1 < index2
+            }
+            return key1.localizedCompare(key2) == .orderedAscending
+        }
+    }
+
+    /// Update custom account order for a specific provider
+    func updateAccountOrder(provider: AIProvider, orderedKeys: [String]) {
+        accountOrder[provider.rawValue] = orderedKeys
     }
     
     private func saveSelectedItems() {
