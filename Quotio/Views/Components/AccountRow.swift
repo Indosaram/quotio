@@ -140,6 +140,7 @@ struct AccountRow: View {
     var onSwitch: (() -> Void)?
     var onToggleDisabled: (() -> Void)?
     var isActiveInIDE: Bool = false
+    var showDragHandle: Bool = false
     
     @State private var settings = MenuBarSettingsManager.shared
     @State private var showWarning = false
@@ -165,6 +166,14 @@ struct AccountRow: View {
     
     var body: some View {
         HStack(spacing: 12) {
+            // Drag handle icon if multiple accounts exist
+            if showDragHandle {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 12)
+            }
+
             // Provider icon
             ProviderIcon(provider: account.provider, size: 24)
             

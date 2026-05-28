@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Provider Disclosure Group
 
@@ -19,6 +20,9 @@ struct ProviderDisclosureGroup: View {
     var onSwitchAccount: ((AccountRowData) -> Void)?
     var onToggleDisabled: ((AccountRowData) -> Void)?
     var isAccountActive: ((AccountRowData) -> Bool)?
+    @Binding var draggedAccountId: String?
+    var onMoveAccount: ((String, String) -> Void)?
+    var onMoveCompleted: (() -> Void)?
 
     @State private var isExpanded: Bool = true
 
@@ -36,9 +40,24 @@ struct ProviderDisclosureGroup: View {
                     onEdit: onEditAccount != nil ? { onEditAccount?(account) } : nil,
                     onSwitch: onSwitchAccount != nil ? { onSwitchAccount?(account) } : nil,
                     onToggleDisabled: onToggleDisabled != nil ? { onToggleDisabled?(account) } : nil,
-                    isActiveInIDE: isAccountActive?(account) ?? false
+                    isActiveInIDE: isAccountActive?(account) ?? false,
+                    showDragHandle: accounts.count > 1
                 )
                 .padding(.leading, 4)
+                .onDrag {
+                    self.draggedAccountId = account.id
+                    return NSItemProvider(object: account.id as NSString)
+                }
+                .onDrop(of: [.text], delegate: AccountRowDropDelegate(
+                    item: account,
+                    draggedAccountId: $draggedAccountId,
+                    onMove: { sourceId, targetId in
+                        onMoveAccount?(sourceId, targetId)
+                    },
+                    onMoveCompleted: {
+                        onMoveCompleted?()
+                    }
+                ))
             }
         } label: {
             providerHeader
@@ -109,7 +128,35 @@ struct ProviderDisclosureGroup: View {
                     isDisabled: false,
                     canDelete: true
                 )
-            ]
+            ],
+            draggedAccountId: .constant(nil)
+        )
+        
+        ProviderDisclosureGroup(
+            provider: .gemini,
+            accounts: [
+                AccountRowData(
+                    id: "1",
+                    provider: .gemini,
+                    displayName: "user@gmail.com",
+                    source: .proxy,
+                    status: "ready",
+                    statusMessage: nil,
+                    isDisabled: false,
+                    canDelete: true
+                ),
+                AccountRowData(
+                    id: "2",
+                    provider: .gemini,
+                    displayName: "work@company.com",
+                    source: .proxy,
+                    status: "cooling",
+                    statusMessage: "Rate limited",
+                    isDisabled: false,
+                    canDelete: true
+                )
+            ],
+            draggedAccountId: .constant(nil)
         )
         
         ProviderDisclosureGroup(
@@ -125,7 +172,32 @@ struct ProviderDisclosureGroup: View {
                     isDisabled: false,
                     canDelete: false
                 )
-            ]
+            ],
+            draggedAccountId: .constant(nil)
         )
+    }
+}
+
+// MARK: - Account Row Drop Delegate
+
+struct AccountRowDropDelegate: DropDelegate {
+    let item: AccountRowData
+    @Binding var draggedAccountId: String?
+    var onMove: (String, String) -> Void
+    var onMoveCompleted: () -> Void
+
+    func dragEntered(info: DropInfo) {
+        guard let draggedId = draggedAccountId, draggedId != item.id else { return }
+        onMove(draggedId, item.id)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        onMoveCompleted()
+        self.draggedAccountId = nil
+        return true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
     }
 }

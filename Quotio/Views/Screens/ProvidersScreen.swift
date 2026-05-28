@@ -26,6 +26,7 @@ struct ProvidersScreen: View {
     @State private var showAddProviderPopover = false
     @State private var switchingAccount: PendingAntigravitySwitch?
     @State private var modeManager = OperatingModeManager.shared
+    @State private var draggedAccountId: String? = nil
 
     private let customProviderService = CustomProviderService.shared
     private let warpService = WarpService.shared
@@ -106,6 +107,15 @@ struct ProvidersScreen: View {
                 canEdit: true
             )
             groups[.warp, default: []].append(data)
+        }
+
+        // Sort accounts inside each provider group
+        for provider in groups.keys {
+            groups[provider] = MenuBarSettingsManager.shared.sortAccounts(
+                groups[provider] ?? [],
+                provider: provider,
+                extractKey: { $0.menuBarAccountKey }
+            )
         }
 
         return groups
@@ -303,7 +313,14 @@ struct ProvidersScreen: View {
                         },
                         isAccountActive: provider == .antigravity ? { account in
                             viewModel.isAntigravityAccountActive(email: account.displayName)
-                        } : nil
+                        } : nil,
+                        draggedAccountId: $draggedAccountId,
+                        onMoveAccount: { sourceId, targetId in
+                            moveAccount(provider: provider, fromId: sourceId, toId: targetId)
+                        },
+                        onMoveCompleted: {
+                            StatusBarManager.shared.rebuildMenuInPlace()
+                        }
                     )
                 }
             }
@@ -375,6 +392,22 @@ struct ProvidersScreen: View {
     }
     
     // MARK: - Helper Functions
+
+    private func moveAccount(provider: AIProvider, fromId: String, toId: String) {
+        guard let accounts = groupedAccounts[provider] else { return }
+        var accountKeys = accounts.map { $0.menuBarAccountKey }
+        
+        guard let sourceIndex = accounts.firstIndex(where: { $0.id == fromId }),
+              let targetIndex = accounts.firstIndex(where: { $0.id == toId }),
+              sourceIndex != targetIndex else { return }
+        
+        withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.7, blendDuration: 0)) {
+            accountKeys.move(fromOffsets: IndexSet(integer: sourceIndex),
+                             toOffset: targetIndex > sourceIndex ? targetIndex + 1 : targetIndex)
+        }
+        
+        MenuBarSettingsManager.shared.updateAccountOrder(provider: provider, orderedKeys: accountKeys)
+    }
 
     private func handleAddProvider(_ provider: AIProvider) {
         // In Local Proxy Mode, require proxy to be running for OAuth

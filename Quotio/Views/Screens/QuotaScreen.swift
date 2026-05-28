@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct QuotaScreen: View {
     @Environment(QuotaViewModel.self) private var viewModel
@@ -335,11 +336,13 @@ private struct QuotaStatusDot: View {
 // MARK: - Provider Quota View
 
 private struct ProviderQuotaView: View {
+    @State private var draggedAccount: String? = nil
     let provider: AIProvider
     let authFiles: [AuthFile]
     let quotaData: [String: ProviderQuotaData]
     let subscriptionInfos: [String: SubscriptionInfo]
     let isLoading: Bool
+    private let settings = MenuBarSettingsManager.shared
     
     /// Get all accounts (from auth files or quota data keys)
     private var allAccounts: [AccountInfo] {
@@ -375,7 +378,8 @@ private struct ProviderQuotaView: View {
             }
         }
         
-        return accounts.sorted { $0.email < $1.email }
+        let sorted = accounts.sorted { $0.email < $1.email }
+        return settings.sortAccounts(sorted, provider: provider, extractKey: { $0.email })
     }
     
     var body: some View {
@@ -389,11 +393,42 @@ private struct ProviderQuotaView: View {
                     AccountQuotaCardV2(
                         provider: provider,
                         account: account,
-                        isLoading: isLoading && account.quotaData == nil
+                        isLoading: isLoading && account.quotaData == nil,
+                        showDragHandle: allAccounts.count > 1
                     )
+                    .onDrag {
+                        self.draggedAccount = account.email
+                        return NSItemProvider(object: account.email as NSString)
+                    }
+                    .onDrop(of: [.text], delegate: AccountDragRelocatableDelegate(
+                        item: account,
+                        currentDragged: $draggedAccount,
+                        onMove: { sourceKey, targetKey in
+                            moveAccount(fromSourceKey: sourceKey, toTargetKey: targetKey)
+                        },
+                        onMoveCompleted: {
+                            StatusBarManager.shared.rebuildMenuInPlace()
+                        }
+                    ))
                 }
             }
         }
+    }
+
+    private func moveAccount(fromSourceKey: String, toTargetKey: String) {
+        let accounts = allAccounts
+        var emailKeys = accounts.map { $0.email }
+        
+        guard let sourceIndex = accounts.firstIndex(where: { $0.email == fromSourceKey }),
+              let targetIndex = accounts.firstIndex(where: { $0.email == toTargetKey }),
+              sourceIndex != targetIndex else { return }
+        
+        withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.7, blendDuration: 0)) {
+            emailKeys.move(fromOffsets: IndexSet(integer: sourceIndex),
+                           toOffset: targetIndex > sourceIndex ? targetIndex + 1 : targetIndex)
+        }
+        
+        MenuBarSettingsManager.shared.updateAccountOrder(provider: provider, orderedKeys: emailKeys)
     }
     
     private var emptyState: some View {
@@ -435,6 +470,7 @@ private struct AccountQuotaCardV2: View {
     let provider: AIProvider
     let account: AccountInfo
     let isLoading: Bool
+    var showDragHandle: Bool = false
     
     @State private var isRefreshing = false
     @State private var switchingAccount: PendingAntigravitySwitch?
@@ -547,6 +583,13 @@ private struct AccountQuotaCardV2: View {
 
     private var accountHeader: some View {
         HStack(spacing: 10) {
+            if showDragHandle {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 12)
+            }
+
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     if let info = account.subscriptionInfo {
@@ -1624,4 +1667,29 @@ private struct QuotaLoadingView: View {
     QuotaScreen()
         .environment(QuotaViewModel())
         .frame(width: 600, height: 500)
+}
+
+// MARK: - Account Drag and Drop Delegate
+
+fileprivate struct AccountDragRelocatableDelegate: DropDelegate {
+    let item: AccountInfo
+    @Binding var currentDragged: String?
+    var onMove: (String, String) -> Void
+    var onMoveCompleted: () -> Void
+
+    func dragEntered(info: DropInfo) {
+        if let currentDragged = currentDragged, currentDragged != item.email {
+            onMove(currentDragged, item.email)
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        onMoveCompleted()
+        self.currentDragged = nil
+        return true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
+    }
 }
