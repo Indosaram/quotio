@@ -274,7 +274,13 @@ nonisolated struct ProviderQuotaData: Codable, Sendable {
     var planType: String?
     var tokenExpiresAt: Date?  // For Kiro: token expiry time
 
-    init(models: [ModelQuota] = [], lastUpdated: Date = Date(), isForbidden: Bool = false, planType: String? = nil, tokenExpiresAt: Date? = nil) {
+    init(
+        models: [ModelQuota] = [],
+        lastUpdated: Date = Date(),
+        isForbidden: Bool = false,
+        planType: String? = nil,
+        tokenExpiresAt: Date? = nil
+    ) {
         self.models = models
         self.lastUpdated = lastUpdated
         self.isForbidden = isForbidden
@@ -511,6 +517,20 @@ actor AntigravityQuotaFetcher {
         subscriptionCache = [:]
     }
 
+    private func canonicalEmail(forAuthFilePath path: String, fallbackFilename file: String) -> String {
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+           let authFile = try? JSONDecoder().decode(AntigravityAuthFile.self, from: data),
+           !authFile.email.isEmpty {
+            return authFile.email.trimmingCharacters(in: .whitespaces).lowercased()
+        }
+        return file
+            .replacingOccurrences(of: "antigravity-", with: "")
+            .replacingOccurrences(of: ".json", with: "")
+            .replacingOccurrences(of: "_", with: ".")
+            .replacingOccurrences(of: ".gmail.com", with: "@gmail.com")
+            .lowercased()
+    }
+
     func refreshAccessToken(refreshToken: String) async throws -> String {
         let (accessToken, _) = try await refreshAccessTokenWithExpiry(refreshToken: refreshToken)
         return accessToken
@@ -727,11 +747,7 @@ actor AntigravityQuotaFetcher {
             let filePath = (expandedPath as NSString).appendingPathComponent(file)
 
             if let info = await fetchSubscriptionInfoForAuthFile(at: filePath) {
-                let email = file
-                    .replacingOccurrences(of: "antigravity-", with: "")
-                    .replacingOccurrences(of: ".json", with: "")
-                    .replacingOccurrences(of: "_", with: ".")
-                    .replacingOccurrences(of: ".gmail.com", with: "@gmail.com")
+                let email = canonicalEmail(forAuthFilePath: filePath, fallbackFilename: file)
                 results[email] = info
             }
         }
@@ -739,7 +755,9 @@ actor AntigravityQuotaFetcher {
         return results
     }
 
-    func fetchQuotaForAuthFile(at path: String) async throws -> ProviderQuotaData {
+    func fetchQuotaForAuthFile(
+        at path: String
+    ) async throws -> ProviderQuotaData {
         let url = URL(fileURLWithPath: path)
         let data = try Data(contentsOf: url)
         let authFile = try JSONDecoder().decode(AntigravityAuthFile.self, from: data)
@@ -759,7 +777,9 @@ actor AntigravityQuotaFetcher {
 
     /// Fetch both quota and subscription for an auth file in one operation
     /// This reuses the subscription info fetched during quota fetch (via fetchProjectId)
-    func fetchQuotaAndSubscriptionForAuthFile(at path: String) async -> (quota: ProviderQuotaData?, subscription: SubscriptionInfo?) {
+    func fetchQuotaAndSubscriptionForAuthFile(
+        at path: String
+    ) async -> (quota: ProviderQuotaData?, subscription: SubscriptionInfo?) {
         let url = URL(fileURLWithPath: path)
         guard let data = try? Data(contentsOf: url),
               let authFile = try? JSONDecoder().decode(AntigravityAuthFile.self, from: data) else {
@@ -791,7 +811,9 @@ actor AntigravityQuotaFetcher {
         return (quota, subscription)
     }
 
-    func fetchAllAntigravityQuotas(authDir: String = "~/.cli-proxy-api") async -> [String: ProviderQuotaData] {
+    func fetchAllAntigravityQuotas(
+        authDir: String = "~/.cli-proxy-api"
+    ) async -> [String: ProviderQuotaData] {
         let expandedPath = NSString(string: authDir).expandingTildeInPath
         let fileManager = FileManager.default
 
@@ -805,11 +827,7 @@ actor AntigravityQuotaFetcher {
         await withTaskGroup(of: (String, ProviderQuotaData?).self) { group in
             for file in files where file.hasPrefix("antigravity-") && file.hasSuffix(".json") {
                 let filePath = (expandedPath as NSString).appendingPathComponent(file)
-                let email = file
-                    .replacingOccurrences(of: "antigravity-", with: "")
-                    .replacingOccurrences(of: ".json", with: "")
-                    .replacingOccurrences(of: "_", with: ".")
-                    .replacingOccurrences(of: ".gmail.com", with: "@gmail.com")
+                let email = canonicalEmail(forAuthFilePath: filePath, fallbackFilename: file)
 
                 group.addTask {
                     do {
@@ -833,7 +851,9 @@ actor AntigravityQuotaFetcher {
 
     /// Fetch all Antigravity data (quotas + subscriptions) in one call
     /// This avoids duplicate API calls by reusing cached subscription info
-    func fetchAllAntigravityData(authDir: String = "~/.cli-proxy-api") async -> (quotas: [String: ProviderQuotaData], subscriptions: [String: SubscriptionInfo]) {
+    func fetchAllAntigravityData(
+        authDir: String = "~/.cli-proxy-api"
+    ) async -> (quotas: [String: ProviderQuotaData], subscriptions: [String: SubscriptionInfo]) {
         // Clear cache at start of refresh cycle
         clearCache()
 
@@ -851,14 +871,9 @@ actor AntigravityQuotaFetcher {
         await withTaskGroup(of: (String, ProviderQuotaData?, SubscriptionInfo?).self) { group in
             for file in files where file.hasPrefix("antigravity-") && file.hasSuffix(".json") {
                 let filePath = (expandedPath as NSString).appendingPathComponent(file)
-                let email = file
-                    .replacingOccurrences(of: "antigravity-", with: "")
-                    .replacingOccurrences(of: ".json", with: "")
-                    .replacingOccurrences(of: "_", with: ".")
-                    .replacingOccurrences(of: ".gmail.com", with: "@gmail.com")
+                let email = canonicalEmail(forAuthFilePath: filePath, fallbackFilename: file)
 
                 group.addTask {
-                    // Fetch both quota and subscription in one call
                     let result = await self.fetchQuotaAndSubscriptionForAuthFile(at: filePath)
                     return (email, result.quota, result.subscription)
                 }
@@ -879,7 +894,9 @@ actor AntigravityQuotaFetcher {
 
     /// Legacy function - now just calls fetchAllAntigravityQuotas
     @available(*, deprecated, message: "Use fetchAllAntigravityData instead")
-    func fetchAllAntigravityQuotasLegacy(authDir: String = "~/.cli-proxy-api") async -> [String: ProviderQuotaData] {
+    func fetchAllAntigravityQuotasLegacy(
+        authDir: String = "~/.cli-proxy-api"
+    ) async -> [String: ProviderQuotaData] {
         let expandedPath = NSString(string: authDir).expandingTildeInPath
         let fileManager = FileManager.default
 
@@ -894,11 +911,7 @@ actor AntigravityQuotaFetcher {
 
             do {
                 let quota = try await fetchQuotaForAuthFile(at: filePath)
-                let email = file
-                    .replacingOccurrences(of: "antigravity-", with: "")
-                    .replacingOccurrences(of: ".json", with: "")
-                    .replacingOccurrences(of: "_", with: ".")
-                    .replacingOccurrences(of: ".gmail.com", with: "@gmail.com")
+                let email = canonicalEmail(forAuthFilePath: filePath, fallbackFilename: file)
                 results[email] = quota
             } catch {
                 Log.quota("Failed to fetch Antigravity quota for \(file): \(error)")
